@@ -4,7 +4,7 @@ import pytest
 from pydantic import ValidationError
 
 from app.summaries.contracts import (
-    GeneratedSummary, RefreshInput, SummarySettingsInput, SummaryVersion, SummaryView,
+    GeneratedSummary, RefreshInput, SemanticReview, SummarySettingsInput, SummaryVersion, SummaryView,
 )
 
 
@@ -52,3 +52,23 @@ def test_version_and_refresh_contracts_are_strict():
     assert RefreshInput(reason="guidance").reason == "guidance"
     with pytest.raises(ValidationError):
         RefreshInput(reason="anything")
+
+
+def test_rejected_semantic_review_keeps_unassessed_gates_unknown():
+    metadata = {"reviewer_id": "auditor", "reviewer_type": "human",
+                "reviewed_at": datetime.now(timezone.utc), "artifact_sha256": "a" * 64,
+                "rubric_version": "v1"}
+    rejected = SemanticReview(status="rejected", **metadata)
+    assert rejected.factual_support is None
+    assert rejected.coverage is None
+    assert rejected.classification is None
+    assert SemanticReview(status="rejected", **metadata, factual_support=False).coverage is None
+    with pytest.raises(ValidationError):
+        SemanticReview(status="rejected", **{k: v for k, v in metadata.items() if k != "artifact_sha256"})
+    with pytest.raises(ValidationError):
+        SemanticReview(status="approved", **metadata)
+    with pytest.raises(ValidationError):
+        SemanticReview(status="approved", **metadata, factual_support=True,
+                       coverage=False, classification=True)
+    assert SemanticReview(status="approved", **metadata, factual_support=True,
+                          coverage=True, classification=True).status == "approved"

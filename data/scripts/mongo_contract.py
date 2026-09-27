@@ -76,12 +76,16 @@ SUMMARY_SEMANTIC_REVIEW = {'bsonType':'object','required':['status'],
     'properties':{'status':{'enum':['pending','approved','rejected']},
         'reviewer_id':S,'reviewer_type':{'enum':['human','automated']},
         'reviewed_at':D,'artifact_sha256':{'bsonType':'string','minLength':64,'maxLength':64},
-        'rubric_version':S,'factual_support':B,'coverage':B,'classification':B},
+        'rubric_version':S,'factual_support':{'bsonType':['bool','null']},
+        'coverage':{'bsonType':['bool','null']},'classification':{'bsonType':['bool','null']}},
     'oneOf':[
         {'properties':{'status':{'enum':['pending']}}},
         {'required':['reviewer_id','reviewer_type','reviewed_at','artifact_sha256',
                      'rubric_version','factual_support','coverage','classification'],
-         'properties':{'status':{'enum':['approved','rejected']}}}]}
+         'properties':{'status':{'enum':['approved']},'factual_support':{'enum':[True]},
+                       'coverage':{'enum':[True]},'classification':{'enum':[True]}}},
+        {'required':['reviewer_id','reviewer_type','reviewed_at','artifact_sha256','rubric_version'],
+         'properties':{'status':{'enum':['rejected']}}}]}
 V3_SCHEMAS = {
  'product_summary_state': schema(['product_id'], dict(
     product_id=S, current_version={'bsonType':['int','long','null'],'minimum':1},

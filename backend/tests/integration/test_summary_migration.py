@@ -110,6 +110,30 @@ def test_version_requires_provenance_and_completed_semantic_review(database):
             "job_id": "j2", "semantic_review": {"status": "approved"}})
 
 
+def test_rejected_semantic_review_allows_unknown_rubric_gates(database):
+    from app.migrations.v3 import migrate
+    from pymongo.errors import WriteError
+    migrate(database, False)
+    now = datetime.now(timezone.utc)
+    base = {"product_id": "P", "version": 1, "parent_version": None,
+            "job_id": "reject-1", "kind": "initial", "narrative": "Candidate",
+            "themes": [], "coverage": {"historical_sample_count": 0, "new_review_count": 0},
+            "delta_review_ids": [], "model_identity": "test", "prompt_version": "v1",
+            "guidance_references": [], "created_at": now}
+    metadata = {"reviewer_id": "auditor", "reviewer_type": "human",
+                "reviewed_at": now, "artifact_sha256": "a" * 64, "rubric_version": "v1"}
+    database.product_summary_versions.insert_one({**base, "_id": "rejected-1",
+        "semantic_review": {"status": "rejected", **metadata,
+                            "factual_support": False, "coverage": None}})
+    with pytest.raises(WriteError):
+        database.product_summary_versions.insert_one({**base, "_id": "rejected-2",
+            "version": 2, "job_id": "reject-2", "semantic_review": {"status": "rejected"}})
+    with pytest.raises(WriteError):
+        database.product_summary_versions.insert_one({**base, "_id": "approved-1",
+            "version": 3, "job_id": "approve-1", "semantic_review": {"status": "approved", **metadata,
+                "factual_support": True, "coverage": None, "classification": True}})
+
+
 def test_populated_index_build_refuses_insufficient_headroom_before_mutation(database, monkeypatch):
     from app.migrations import v3
     from app.repositories.capacity import CapacityGuard

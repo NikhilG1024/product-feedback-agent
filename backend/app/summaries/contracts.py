@@ -47,10 +47,13 @@ class SemanticReview(Contract):
 
     @model_validator(mode="after")
     def completed_review_is_attributed(self):
-        if self.status != "pending" and any(getattr(self, name) is None for name in
+        if self.status != "pending" and any(not getattr(self, name) for name in
             ("reviewer_id", "reviewer_type", "reviewed_at", "artifact_sha256",
-             "rubric_version", "factual_support", "coverage", "classification")):
-            raise ValueError("Completed semantic review requires attribution and rubric results")
+             "rubric_version")):
+            raise ValueError("Completed semantic review requires attribution")
+        if self.status == "approved" and any(getattr(self, name) is not True for name in
+            ("factual_support", "coverage", "classification")):
+            raise ValueError("Approved semantic review requires all rubric gates to pass")
         return self
 
 
