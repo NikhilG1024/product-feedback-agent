@@ -32,9 +32,10 @@ def public_review(row):
 
 
 class ReviewService:
-    def __init__(self, database, submission_limit=10, *, capacity=None):
+    def __init__(self, database, submission_limit=10, *, capacity=None, summaries=None):
         self.repository=ReviewRepository(database, capacity=capacity)
         self.submission_limit=submission_limit
+        self.summaries=summaries
 
     def submit(self, product_id: str, principal: Principal, key: str, payload: ReviewInput) -> dict:
         if principal.role!='reviewer': raise ServiceError('forbidden',403)
@@ -52,17 +53,37 @@ class ReviewService:
             if existing is not None: return self._replayed(existing,digest)
             raise ServiceError('rate_limited',429)
         row=self.repository.create_submission(product_id,principal.user_id,key,payload,digest,now)
+        if self.summaries is not None:
+            try:
+                self.summaries.admit_review(row)
+                self.repository.database.reviews.update_one({'_id':row['_id']}, {'$set':{'summary_input_outstanding':False}})
+            except Exception:
+                # The saved review remains acknowledged. The summary worker's
+                # reconciliation sweep will retry this durable marker.
+                pass
         return self._replayed(row,digest)
 
     def _replayed(self,row,digest):
         if row['payload_digest']!=digest: raise ServiceError('idempotency_conflict',409)
-        return {'id':row['_id'],'processing':row['processing']}
+        return {'id':row['_id'],'processing':row['processing'],
+                'summary':self._summary_status(row)}
+
+    def _summary_status(self,row):
+        if self.summaries is None: return None
+        result = self.summaries.summary_status(row['parent_asin'], row['_id'])
+        if result['status'] == 'incorporated':
+            return {'status':'included','version':result['version']}
+        if result['status'] == 'untracked':
+            return {'status':'saved','version':None}
+        state = self.summaries.current(row['parent_asin']).status
+        return {'status':state if state in {'queued','updating','failed'} else 'waiting','version':None}
 
     def status(self, review_id, principal):
         row=self.repository.get(review_id)
         if row is None: raise ServiceError('review_not_found',404)
         if principal.role!='pm' and row.get('author_id')!=principal.user_id: raise ServiceError('forbidden',403)
-        return {'id':row['_id'],'processing':row.get('processing')}
+        return {'id':row['_id'],'processing':row.get('processing'),
+                'summary':self._summary_status(row)}
 
     def list(self, product_id: str, principal: Principal, source: str | None, batch_id: str | None, cursor: str | None, limit: int) -> dict:
         if not 1<=limit<=100: raise ServiceError('invalid_page_size',422)

@@ -13,10 +13,11 @@ def public_decision(row):
 
 
 class DecisionService:
-    def __init__(self, database, memory=None, *, clock=utcnow, capacity=None):
+    def __init__(self, database, memory=None, *, clock=utcnow, capacity=None, summaries=None):
         self.repository = DecisionRepository(database, capacity=capacity)
         self.analysis = AnalysisRepository(database, capacity=capacity)
         self.memory, self.clock = memory, clock
+        self.summaries = summaries
 
     def create(self, product_id, principal, payload):
         if principal.role != 'pm': raise ServiceError('forbidden', 403)
@@ -30,7 +31,16 @@ class DecisionService:
         if {r['_id'] for r in evidence} != set(payload.evidence_ids) or any(
             r['parent_asin'] != product_id or any(r.get(key, r['timestamp']) > cutoff for key in ('timestamp', 'created_at', 'available_at')) for r in evidence):
             raise ServiceError('invalid_decision_evidence', 422)
-        return public_decision(self.repository.create(product_id, principal, payload, now))
+        decision = self.repository.create(product_id, principal, payload, now)
+        if self.summaries is not None:
+            try:
+                self.summaries.request_refresh(product_id, 'decision:' + decision['_id'], 'guidance')
+                self.repository.database.decisions.update_one({'_id':decision['_id']},
+                    {'$set':{'summary_refresh_outstanding':False}})
+            except Exception:
+                # The durable decision remains available for a reconciliation sweep.
+                pass
+        return public_decision(decision)
 
     def eligible(self, product_id, scope, snapshot_at):
         cutoff = min(snapshot_at, scope.available_through) if scope.available_through else snapshot_at

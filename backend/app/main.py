@@ -78,7 +78,8 @@ def create_app(settings: Settings, services: object | None = None, *, lifespan=N
     @app.exception_handler(ServiceError)
     async def service_error_handler(request: Request, exc: ServiceError) -> JSONResponse:
         code = exc.code
-        secrets = (settings.reviewer_token, settings.pm_token, settings.llm_api_key, settings.hindsight_api_key, settings.mongo_uri)
+        secrets = (settings.reviewer_token, settings.pm_token, settings.llm_api_key,
+                   settings.openrouter_api_key, settings.hindsight_api_key, settings.mongo_uri)
         if any(secret and secret in code for secret in secrets):
             code = "internal_error"
         if code == 'legacy_analysis_unsupported':
@@ -124,6 +125,8 @@ def create_app(settings: Settings, services: object | None = None, *, lifespan=N
     app.include_router(questions_router)
     from app.summaries.progress_api import router as summary_progress_router
     app.include_router(summary_progress_router)
+    from app.summaries.api import router as summary_router
+    app.include_router(summary_router)
     return app
 
 
@@ -145,19 +148,34 @@ def configured_app() -> FastAPI:
                           model=settings.llm_model, timeout=settings.provider_timeout_seconds) if settings.llm_api_key else None
     memory = HindsightMemory(settings.hindsight_api_url, settings.hindsight_api_key,
                              timeout=settings.provider_timeout_seconds) if settings.hindsight_api_url and settings.hindsight_api_key else None
+    from app.integrations.openrouter_summary import OpenRouterSummaryModel
+    summary_model = OpenRouterSummaryModel(settings.openrouter_api_key,
+        base_url=settings.openrouter_api_url, model=settings.openrouter_summary_model,
+        timeout=settings.summary_provider_timeout_seconds) if settings.openrouter_api_key else None
     analysis = AnalysisService(database, model, memory, max_reviews=settings.max_analysis_reviews,
                                max_chunk_reviews=settings.max_chunk_reviews, max_chunk_chars=settings.max_chunk_chars,
                                max_findings=settings.max_analysis_findings, capacity=capacity)
     from app.services.decisions import DecisionService
     from app.services.review_processing import ReviewProcessor
-    decisions = DecisionService(database, memory, capacity=capacity)
+    from app.summaries.repository import SummaryRepository
+    summary_repository = SummaryRepository(database, capacity=capacity)
+    decisions = DecisionService(database, memory, capacity=capacity, summaries=summary_repository)
     review_processor = ReviewProcessor(database, model, memory, capacity=capacity)
     worker = Worker(JobRepository(database, settings.max_job_attempts, capacity=capacity), {'analysis_runs': analysis.handle, 'reviews': review_processor.handle, 'decisions': decisions.handle},
                     lease_seconds=settings.job_lease_seconds)
     from app.services.questions import QuestionService
     questions = QuestionService(database, model, max_question_chars=settings.max_question_chars,
                                 max_context_chars=settings.max_question_context_chars)
-    services = SimpleNamespace(questions=questions, reviews=ReviewService(database, submission_limit=settings.review_submission_limit, capacity=capacity), analysis=analysis, decisions=decisions, worker=worker,
+    from app.summaries.service import SummaryService
+    from app.summaries.worker import SummaryWorker
+    summaries = SummaryService(database, summary_repository, model,
+                               max_question_context_chars=settings.max_question_context_chars)
+    summary_worker = SummaryWorker(database, summary_repository, summary_model, memory=memory,
+                                   lease_seconds=settings.job_lease_seconds)
+    services = SimpleNamespace(questions=questions, summaries=summaries,
+                               reviews=ReviewService(database, submission_limit=settings.review_submission_limit,
+                                                     capacity=capacity, summaries=summary_repository),
+                               analysis=analysis, decisions=decisions, worker=worker,
                                check_ready=capacity.check_ready)
     @asynccontextmanager
     async def lifespan(app):
@@ -169,9 +187,12 @@ def configured_app() -> FastAPI:
                 cleanup.callback(client.close)
                 if memory is not None: cleanup.callback(memory.close)
                 if model is not None: cleanup.callback(model.close)
+                if summary_model is not None: cleanup.callback(summary_model.close)
                 cleanup.callback(worker.stop)
+                cleanup.callback(summary_worker.stop)
 
     app = create_app(settings, services, lifespan=lifespan)
     app.state.mongo_client = client
     app.state.worker = worker
+    app.state.summary_worker = summary_worker
     return app

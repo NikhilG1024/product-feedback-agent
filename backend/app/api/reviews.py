@@ -15,9 +15,14 @@ class ProcessingResponse(BaseModel):
     classification_status: str | None = None
     error_code: str | None = None
 
+class SummaryStatusResponse(BaseModel):
+    status: str
+    version: int | None = None
+
 class SubmissionResponse(BaseModel):
     id: str
     processing: ProcessingResponse | None
+    summary: SummaryStatusResponse | None = None
 
 class QuoteResponse(BaseModel):
     review_id: str

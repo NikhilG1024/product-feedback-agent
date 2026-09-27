@@ -49,6 +49,7 @@ class ReviewRepository:
                   'title':payload.title,'text':payload.text,'rating':payload.rating,'timestamp':now,'timestamp_ms':int(now.timestamp()*1000),
                   'created_at':now,'author_id':author_id,'version':1,'provenance':{'kind':'user_submission'},
                   'idempotency_key':key,'payload_digest':digest,
+                  'summary_input_outstanding':True,
                   'processing':{'status':'pending','attempts':0,'next_attempt_at':now,'memory_status':'pending','classification_status':'pending'}}
         return self.insert(document)
 
