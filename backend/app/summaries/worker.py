@@ -56,14 +56,9 @@ class SummaryWorker:
             count += 1
         return count
 
-    def _guidance(self, claim, prospective_review_ids):
+    def _guidance(self, claim, prospective_review_ids, refresh_ids=None):
         """Freeze only decisions admitted by claim time and grounded in coverage."""
         product_id = claim.product_id
-        state = self.repository.states.find_one({"_id": product_id,
-            "job.owner_token": claim.owner_token}, {"job.boundary": 1})
-        if not state:
-            raise SummaryGenerationError("summary_claim_lost")
-        boundary = state["job"]["boundary"]
         # Reconciliation removes orphan ledger marks before selecting eligible
         # evidence. Newly frozen review IDs are the only unpublished additions.
         self.repository.reconcile(product_id)
@@ -71,16 +66,15 @@ class SummaryWorker:
             "product_id": product_id, "source": {"$in": ["initial", "user_submission"]},
             "incorporated_version": {"$ne": None}}, {"review_id": 1})}
         allowed.update(prospective_review_ids)
-        markers = self.repository.inputs.find({"product_id": product_id,
-            "source": "refresh_guidance", "admission_sequence": {"$lte": boundary}},
-            {"review_id": 1}).sort("admission_sequence", -1).limit(100)
         prefix = "_refresh:decision:"
-        ids = [row["review_id"][len(prefix):] for row in markers
-               if row["review_id"].startswith(prefix)]
+        if refresh_ids is None:
+            refresh_ids = self.repository.pending_refresh_ids(claim)
+        ids = [marker[len(prefix):] for marker in refresh_ids
+               if marker.startswith(prefix)]
         rows = {str(row["_id"]): row for row in self.database.decisions.find({
             "_id": {"$in": ids}, "parent_asin": product_id})}
         selected = []
-        for decision_id in reversed(ids):
+        for decision_id in ids:
             row = rows.get(decision_id)
             if row is None or not set(row.get("evidence_ids", [])) <= allowed:
                 continue
@@ -149,9 +143,11 @@ class SummaryWorker:
                 if product is None or parent is None:
                     raise SummaryGenerationError("summary_parent_missing")
                 prospective_reviews = self.repository.pending_rows(claim)
+                refresh_ids = self.repository.pending_refresh_ids(claim)
                 candidate_guidance = self._guidance(claim,
-                    {str(row["_id"]) for row in prospective_reviews})
-                frozen = self.repository.freeze(claim, [], [item["id"] for item in candidate_guidance])
+                    {str(row["_id"]) for row in prospective_reviews}, refresh_ids)
+                frozen = self.repository.freeze(claim, [], [item["id"] for item in candidate_guidance],
+                                                refresh_ids=refresh_ids)
                 frozen_guidance = {item["id"]: item for item in candidate_guidance}
                 missing_guidance = [item_id for item_id in frozen.guidance_ids if item_id not in frozen_guidance]
                 if missing_guidance:

@@ -327,6 +327,18 @@ class SummaryRepository:
             {"_id": {"$in": ids}, "parent_asin": claim.product_id})}
         return [rows[review_id] for review_id in ids if review_id in rows]
 
+    def pending_refresh_ids(self, claim) -> list[str]:
+        """Return the exact oldest refresh batch this claim will freeze."""
+        state = self._owned(claim)
+        if state is None:
+            raise ValueError("claim is no longer current")
+        job = state["job"]
+        if job.get("refresh_ids") is not None:
+            return list(job["refresh_ids"])
+        return [item["review_id"] for item in self.inputs.find(
+            self._refresh_query(claim.product_id, job["boundary"]))
+            .sort("admission_sequence", 1).limit(20)]
+
     @staticmethod
     def _claim_from(state):
         job = state["job"]
@@ -424,7 +436,7 @@ class SummaryRepository:
                 candidate.coverage.new_review_count != expected_new):
             raise ValueError("cumulative coverage does not match parent and frozen inputs")
 
-    def freeze(self, claim, review_ids, guidance_ids) -> FrozenUpdate:
+    def freeze(self, claim, review_ids, guidance_ids, *, refresh_ids=None) -> FrozenUpdate:
         state = self._owned(claim)
         if state is None:
             raise ValueError("claim is no longer current")
@@ -444,9 +456,17 @@ class SummaryRepository:
             raise ValueError("review batch includes unavailable inputs")
         selected = selected[:20]
         ids = [item["review_id"] for item in selected]
-        markers = list(self.inputs.find(self._refresh_query(claim.product_id, job["boundary"]))
-                       .sort("admission_sequence", 1).limit(20))
-        refresh_ids = [item["review_id"] for item in markers]
+        if refresh_ids is None:
+            refresh_ids = self.pending_refresh_ids(claim)
+        else:
+            refresh_ids = list(refresh_ids)
+            if len(refresh_ids) > 20 or len(refresh_ids) != len(set(refresh_ids)):
+                raise ValueError("refresh batch must contain at most 20 unique IDs")
+            rows = list(self.inputs.find({**self._refresh_query(claim.product_id, job["boundary"]),
+                                          "review_id": {"$in": refresh_ids}})
+                        .sort("admission_sequence", 1))
+            if [row["review_id"] for row in rows] != refresh_ids:
+                raise ValueError("refresh batch includes unavailable or unordered inputs")
         guidance_ids = list(guidance_ids)
         if len(set(guidance_ids)) != len(guidance_ids):
             raise ValueError("guidance IDs must be unique")

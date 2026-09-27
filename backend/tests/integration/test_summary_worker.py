@@ -217,3 +217,103 @@ def test_guidance_respects_membership_and_claim_boundary(setup):
     frozen = repo.freeze(claim, [], [item["id"] for item in selected])
     assert frozen.guidance_ids == ["included"]
     assert "_refresh:decision:late" not in frozen.refresh_ids
+
+
+@pytest.mark.parametrize("decision_count", [21, 101])
+def test_guidance_consumes_exact_oldest_refresh_batches(setup, decision_count):
+    database, repo = setup
+    publish_empty_initial(repo)
+    now = datetime.now(timezone.utc)
+    worker = SummaryWorker(database, repo, Provider(), memory=Memory())
+    for index in range(decision_count):
+        identifier = f"decision-{index:03d}"
+        database.decisions.insert_one({"_id": identifier, "parent_asin": "P",
+            "kind": "preference", "rationale": "Synthetic guidance " + identifier,
+            "evidence_ids": [], "decided_at": now, "available_through": now,
+            "summary_refresh_outstanding": False})
+        repo.request_refresh("P", "decision:" + identifier, "guidance")
+    consumed = []
+    used = []
+    while len(consumed) < decision_count:
+        claim = repo.claim("P", datetime.now(timezone.utc), 180)
+        assert claim is not None
+        guidance = worker._guidance(claim, set())
+        frozen = repo.freeze(claim, [], [item["id"] for item in guidance])
+        batch = [marker.removeprefix("_refresh:decision:") for marker in frozen.refresh_ids]
+        assert frozen.guidance_ids == batch
+        consumed.extend(batch)
+        used.extend(frozen.guidance_ids)
+        # Simulate the completed generation/publication so the next claim can
+        # consume the remaining durable markers.
+        parent = repo.version("P", claim.parent_version)
+        version = parent.model_copy(update={"version": frozen.version,
+            "parent_version": claim.parent_version, "job_id": claim.job_id,
+            "kind": "guidance", "guidance_references": frozen.guidance_ids,
+            "published_at": None, "created_at": datetime.now(timezone.utc)})
+        version.semantic_review.status = "pending"
+        version.semantic_review.reviewer_id = None
+        version.semantic_review.reviewer_type = None
+        version.semantic_review.reviewed_at = None
+        version.semantic_review.rubric_version = None
+        version.semantic_review.factual_support = None
+        version.semantic_review.coverage = None
+        version.semantic_review.classification = None
+        version.semantic_review.artifact_sha256 = None
+        version_id = repo.stage(claim, version)
+        assert repo.publish(claim, version_id, datetime.now(timezone.utc))
+    expected = [f"decision-{index:03d}" for index in range(decision_count)]
+    assert consumed == expected
+    assert used == expected
+
+
+def test_guidance_batch_counts_mixed_refresh_markers(setup):
+    database, repo = setup
+    publish_empty_initial(repo)
+    now = datetime.now(timezone.utc)
+    for index in range(20):
+        identifier = f"decision-{index:03d}"
+        database.decisions.insert_one({"_id": identifier, "parent_asin": "P",
+            "kind": "preference", "rationale": "Synthetic guidance " + identifier,
+            "evidence_ids": [], "decided_at": now, "available_through": now,
+            "summary_refresh_outstanding": False})
+        repo.request_refresh("P", "decision:" + identifier, "guidance")
+        if index == 9:
+            repo.request_refresh("P", "manual-flush", "pending_reviews")
+    claim = repo.claim("P", datetime.now(timezone.utc), 180)
+    assert claim is not None
+    selected = SummaryWorker(database, repo, Provider(), memory=Memory())._guidance(claim, set())
+    frozen = repo.freeze(claim, [], [item["id"] for item in selected])
+    assert len(frozen.refresh_ids) == 20
+    assert "_refresh:manual-flush" in frozen.refresh_ids
+    assert frozen.guidance_ids == [f"decision-{index:03d}" for index in range(19)]
+    assert "_refresh:decision:decision-019" not in frozen.refresh_ids
+
+
+def test_late_insert_at_reserved_sequence_is_not_consumed_without_guidance(setup):
+    database, repo = setup
+    publish_empty_initial(repo)
+    now = datetime.now(timezone.utc)
+    database.decisions.insert_one({"_id": "late-sequence", "parent_asin": "P",
+        "kind": "preference", "rationale": "Synthetic late guidance", "evidence_ids": [],
+        "decided_at": now, "available_through": now,
+        "summary_refresh_outstanding": False})
+    repo.request_refresh("P", "existing-flush", "pending_reviews")
+    # A concurrent request reserves its sequence before inserting its ledger
+    # row. The worker claims during that gap and snapshots no refresh marker.
+    repo.states.update_one({"_id": "P"}, {"$inc": {"admission_sequence": 1}})
+    reserved = repo.states.find_one({"_id": "P"})["admission_sequence"]
+    claim = repo.claim("P", now, 180)
+    assert claim is not None
+    refresh_ids = repo.pending_refresh_ids(claim)
+    assert refresh_ids == ["_refresh:existing-flush"]
+    worker = SummaryWorker(database, repo, Provider(), memory=Memory())
+    assert worker._guidance(claim, set(), refresh_ids) == []
+    database.product_summary_inputs.insert_one({"_id": uuid4().hex, "product_id": "P",
+        "review_id": "_refresh:decision:late-sequence", "source": "refresh_guidance",
+        "admission_sequence": reserved, "admitted_at": now, "source_timestamp": now,
+        "incorporated_version": None})
+    frozen = repo.freeze(claim, [], [], refresh_ids=refresh_ids)
+    assert frozen.refresh_ids == ["_refresh:existing-flush"]
+    assert repo.pending_refresh_ids(claim) == refresh_ids  # Frozen snapshot is stable.
+    assert database.product_summary_inputs.find_one({"review_id":
+        "_refresh:decision:late-sequence"})["incorporated_version"] is None
