@@ -24,6 +24,25 @@ it("review is saved independently of memory completion", async () => {
   expect(screen.getByText("Preparing feedback for the AI")).toBeInTheDocument();
   expect(screen.queryByText("Analysis complete")).not.toBeInTheDocument();
 });
+it("continues checking summary inclusion after memory processing finishes", async () => {
+  const api = new DemoApi();
+  Object.defineProperty(api, "demo", { value: false });
+  const saved = { id: "saved-review", processing: { status: "completed", attempts: 1,
+    memory_status: "synced", classification_status: "completed" },
+    summary: { status: "waiting" as const, version: null } };
+  vi.spyOn(api, "submit").mockResolvedValue(saved);
+  const status = vi.spyOn(api, "status").mockResolvedValue({ ...saved,
+    summary: { status: "included", version: 2 } });
+  const user = userEvent.setup();
+  render(<Reviewer api={api} product={product} onSaved={() => {}} />);
+  await user.click(screen.getByRole("radio", { name: "4 stars" }));
+  await user.type(screen.getByLabelText("Review title"), "Battery");
+  await user.type(screen.getByLabelText("Your experience"), "Long life.");
+  await user.click(screen.getByRole("button", { name: "Submit review" }));
+  expect(await screen.findByText("Awaiting update threshold")).toBeInTheDocument();
+  expect(await screen.findByText("Included in version 2", {}, { timeout: 6000 })).toBeInTheDocument();
+  expect(status).toHaveBeenCalled();
+}, 8000);
 it("does not render report content until completed", () => {
   const run: Run = {
     id: "r",

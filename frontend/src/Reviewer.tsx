@@ -3,6 +3,7 @@ import { ArrowRight, Check, Star } from "lucide-react";
 import type { Api, Product, ReviewInput, Submission } from "./types";
 import { ApiError, errorMessage } from "./api";
 import { ErrorNotice, isFinished, StatePill } from "./ui";
+const summaryFinished = (status?: string) => status === "included" || status === "failed";
 export function Reviewer({
   api,
   product,
@@ -48,7 +49,7 @@ export function Reviewer({
     if (
       !result ||
       api.demo ||
-      isFinished(result.processing?.status) ||
+      (isFinished(result.processing?.status) && summaryFinished(result.summary?.status)) ||
       statusError
     )
       return;
@@ -59,7 +60,7 @@ export function Reviewer({
         const next = await api.status(result!.id);
         if (cancelled) return;
         setResult(next);
-        if (!isFinished(next.processing?.status))
+        if (!isFinished(next.processing?.status) || !summaryFinished(next.summary?.status))
           timer = setTimeout(poll, 4000);
       } catch (e) {
         if (!cancelled) setStatusError(errorMessage(e));
@@ -70,7 +71,7 @@ export function Reviewer({
       cancelled = true;
       clearTimeout(timer);
     };
-  }, [result?.id, api, statusError]);
+  }, [result?.id, result?.processing?.status, result?.summary?.status, api, statusError]);
   async function submit() {
     if (busy) return;
     if (!attempt.current) {

@@ -11,16 +11,19 @@ export function SummaryHistory({ api, product, selectedVersion, onSelect }: {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
   const generation = useRef(0);
-  useEffect(() => {
+  async function firstPage() {
     const id = ++generation.current;
-    let cancelled = false;
     setItems([]); setCursor(null); setLoading(true); setError("");
-    api.summaryHistory(product).then((page) => {
-      if (cancelled || id !== generation.current) return;
+    try {
+      const page = await api.summaryHistory(product);
+      if (id !== generation.current) return;
       setItems(page.items); setCursor(page.next_cursor);
-    }).catch((e) => { if (!cancelled && id === generation.current) setError(errorMessage(e)); })
-      .finally(() => { if (!cancelled && id === generation.current) setLoading(false); });
-    return () => { cancelled = true; generation.current++; };
+    } catch (e) { if (id === generation.current) setError(errorMessage(e)); }
+    finally { if (id === generation.current) setLoading(false); }
+  }
+  useEffect(() => {
+    void firstPage();
+    return () => { generation.current++; };
   }, [api, product]);
   async function more() {
     if (!cursor || loading) return;
@@ -36,7 +39,7 @@ export function SummaryHistory({ api, product, selectedVersion, onSelect }: {
   }
   return <section className="summary-history" aria-label="Summary history">
     <h3>Version history</h3>
-    {error && <ErrorNotice message={error} retry={() => { if (cursor) void more(); }} />}
+    {error && <ErrorNotice message={error} retry={() => { if (cursor) void more(); else void firstPage(); }} />}
     <div className="version-list">
       <button className={selectedVersion === null ? "button active" : "button"} onClick={() => onSelect(null)}>Current version</button>
       {items.map((v) => <button key={v.version} className={selectedVersion === v.version ? "button active" : "button"} onClick={() => onSelect(v.version)}>

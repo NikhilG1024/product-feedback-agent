@@ -50,13 +50,14 @@ export function SummaryDashboard({ api, product, reviewVersion = 0 }: { api: Api
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
   const [historyError, setHistoryError] = useState("");
+  const [historyOpen, setHistoryOpen] = useState(false);
   const [refreshBusy, setRefreshBusy] = useState(false);
   const [refreshError, setRefreshError] = useState("");
   const refreshAttempt = useRef<{ product: string; key: string } | null>(null);
   const requestId = useRef(0);
   useEffect(() => {
     const id = ++requestId.current;
-    setView(null); setSelectedVersion(null); setHistorical(null); setLoading(true); setError(""); setRefreshBusy(false); setRefreshError("");
+    setView(null); setSelectedVersion(null); setHistorical(null); setHistoryOpen(false); setLoading(true); setError(""); setRefreshBusy(false); setRefreshError("");
     refreshAttempt.current = null;
     api.summary(product.id).then((next) => { if (id === requestId.current) setView(next); })
       .catch((e) => { if (id === requestId.current) setError(errorMessage(e)); })
@@ -118,7 +119,8 @@ export function SummaryDashboard({ api, product, reviewVersion = 0 }: { api: Api
         <div className="summary-actions"><button className="button" disabled={refreshBusy || view.pending_review_count === 0} onClick={() => void refresh()}>{refreshBusy ? "Requesting…" : refreshAttempt.current ? "Retry update request" : "Update now"}</button>
           <button className="text-button" onClick={() => void retryLoad()}>Check for updates</button></div>
         {refreshError && <ErrorNotice message={refreshError} retry={() => void refresh()} />}
-        <SummaryHistory api={api} product={product.id} selectedVersion={selectedVersion} onSelect={setSelectedVersion} />
+        {!historyOpen && <button className="text-button" onClick={() => setHistoryOpen(true)}>View version history</button>}
+        {historyOpen && <SummaryHistory api={api} product={product.id} selectedVersion={selectedVersion} onSelect={setSelectedVersion} />}
         {historyError && <ErrorNotice message={historyError} />}
         {selectedVersion !== null && !historical && !historyError && <Loading>Loading version {selectedVersion}…</Loading>}
         {version && <article className={selectedVersion === null ? "published-summary" : "published-summary historical-summary"}>

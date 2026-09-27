@@ -12,11 +12,13 @@ const speaker: Product = { id: "demo-speaker", title: "Arc Portable Speaker", pr
 it("loads only the cached summary on product selection and labels its actual sample", async () => {
   const api = new DemoApi();
   const summary = vi.spyOn(api, "summary");
+  const history = vi.spyOn(api, "summaryHistory");
   const analyze = vi.spyOn(api, "analyze");
   render(<SummaryDashboard api={api} product={headphone} />);
   expect(await screen.findByText(/Based on 4 sampled historical reviews \+ 0 new reviews/)).toBeInTheDocument();
   expect(summary).toHaveBeenCalledWith(headphone.id);
   expect(analyze).not.toHaveBeenCalled();
+  expect(history).not.toHaveBeenCalled();
   expect(screen.queryByText(/Based on 20/)).not.toBeInTheDocument();
   expect(screen.queryByText(/all reviews/i)).not.toBeInTheDocument();
 });
@@ -84,6 +86,7 @@ it("paginates history and binds evidence and questions to the selected version",
   }
   const question = vi.spyOn(api, "summaryQuestion");
   render(<SummaryDashboard api={api} product={headphone} />);
+  fireEvent.click(await screen.findByRole("button", { name: "View version history" }));
   const history = await screen.findByRole("region", { name: "Summary history" });
   fireEvent.click(await within(history).findByRole("button", { name: "Load older versions" }));
   expect(await within(history).findByRole("button", { name: /Version 1/ })).toBeInTheDocument();
@@ -94,4 +97,26 @@ it("paginates history and binds evidence and questions to the selected version",
   fireEvent.change(screen.getByRole("textbox", { name: "Question" }), { target: { value: "How is the battery?" } });
   fireEvent.click(screen.getByRole("button", { name: "Ask" }));
   await waitFor(() => expect(question).toHaveBeenCalledWith(headphone.id, 1, "How is the battery?"));
+});
+
+it("retries the first history request when it fails", async () => {
+  const api = new DemoApi();
+  const real = api.summaryHistory.bind(api);
+  const history = vi.spyOn(api, "summaryHistory")
+    .mockRejectedValueOnce(new ApiError(503, "request_failed"))
+    .mockImplementation((product, cursor) => real(product, cursor));
+  render(<SummaryDashboard api={api} product={headphone} />);
+  fireEvent.click(await screen.findByRole("button", { name: "View version history" }));
+  const panel = await screen.findByRole("region", { name: "Summary history" });
+  fireEvent.click(await within(panel).findByRole("button", { name: "Try again" }));
+  await waitFor(() => expect(history).toHaveBeenCalledTimes(2));
+  expect(await within(panel).findByRole("button", { name: /Version 1/ })).toBeInTheDocument();
+});
+
+it("keeps a demo review included in its original version after another publication", async () => {
+  const api = new DemoApi();
+  const first = await api.submit(headphone.id, { rating: 3, title: "First", text: "First report" }, "first");
+  const second = await api.submit(headphone.id, { rating: 4, title: "Second", text: "Second report" }, "second");
+  expect((await api.status(first.id)).summary).toEqual({ status: "included", version: 2 });
+  expect((await api.status(second.id)).summary).toEqual({ status: "included", version: 3 });
 });

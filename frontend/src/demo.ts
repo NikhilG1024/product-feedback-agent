@@ -245,9 +245,9 @@ export class DemoApi implements Api {
     const result = [...this.submissions.values()].find((r) => r.id === id);
     if (!result) throw new ApiError(404, "missing");
     const review = this.newReviews.find((r) => r.id === id)!;
-    const current = this.view(review.parent_asin).current;
-    return clone({ ...result, summary: current?.delta_review_ids.includes(id)
-      ? { status: "included", version: current.version } : { status: "waiting", version: null } });
+    const included = this.versions(review.parent_asin).find((v) => v.delta_review_ids.includes(id));
+    return clone({ ...result, summary: included
+      ? { status: "included", version: included.version } : { status: "waiting", version: null } });
   }
   async analyze(product: string, body: AnalysisInput) {
     const live = this.newReviews.filter((r) => r.parent_asin === product);
