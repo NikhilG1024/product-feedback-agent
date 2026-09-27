@@ -45,6 +45,8 @@ class Settings:
     review_submission_limit: int = 10
     max_question_chars: int = 2000
     max_question_context_chars: int = 2000
+    summary_initialization_progress_path: str = ""
+    summary_initialization_stale_seconds: int = 120
 
     def __repr__(self) -> str:
         return "Settings(<redacted>)"
@@ -108,4 +110,5 @@ class Settings:
             cors_origins=origins,
             reviewer_user_id=os.getenv("DEMO_REVIEWER_USER_ID", "demo-reviewer"),
             pm_user_id=os.getenv("DEMO_PM_USER_ID", "demo-pm"),
+            summary_initialization_progress_path=os.getenv("SUMMARY_INITIALIZATION_PROGRESS_PATH", ""),
         )

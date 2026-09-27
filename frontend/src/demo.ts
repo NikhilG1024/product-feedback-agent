@@ -10,6 +10,7 @@ import type {
   Run,
   Source,
   Submission,
+  InitializationProgressResponse,
 } from "./types";
 const products = [
   {
@@ -67,6 +68,9 @@ const quotes: Record<string, string[]> = {
 const clone = <T>(x: T): T => structuredClone(x);
 export class DemoApi implements Api {
   readonly demo = true;
+  async summaryProgress(): Promise<InitializationProgressResponse> {
+    return { availability: "unavailable", progress: null };
+  }
   async question(product: string, run: string, _question: string) {
     const r = this.runs.get(run);
     if (!r || r.parent_asin !== product) throw new ApiError(404, "missing");

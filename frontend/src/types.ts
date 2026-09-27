@@ -5,6 +5,26 @@ export interface Product {
   title: string;
   product_type: string | null;
 }
+export type InitializationProductStatus = "queued" | "generating" | "citation_checks_passed" | "reused" | "needs_review";
+export interface InitializationProgressResponse {
+  availability: "available" | "stale" | "unavailable";
+  progress: null | {
+    run_id: string;
+    started_at: string;
+    updated_at: string;
+    status: "running" | "completed" | "completed_with_failures";
+    total: number;
+    workers: number;
+    completed: number;
+    failed: number;
+    active: number;
+    queued: number;
+    published: null;
+    elapsed_seconds?: number;
+    products: { id: string; title: string; status: InitializationProductStatus; elapsed_seconds?: number }[];
+    next_offset: number | null;
+  };
+}
 export interface Page<T> {
   items: T[];
   next_cursor: string | null;
@@ -105,6 +125,7 @@ export interface Decision {
   processing: Processing | null;
 }
 export interface Api {
+  summaryProgress(offset?: number): Promise<InitializationProgressResponse>;
   question(product: string, run: string, question: string): Promise<Answer>;
   readonly demo: boolean;
   products(cursor?: string): Promise<Page<Product>>;

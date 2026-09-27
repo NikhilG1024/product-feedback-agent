@@ -122,6 +122,8 @@ def create_app(settings: Settings, services: object | None = None, *, lifespan=N
     app.include_router(decisions_router)
     from app.api.questions import router as questions_router
     app.include_router(questions_router)
+    from app.summaries.progress_api import router as summary_progress_router
+    app.include_router(summary_progress_router)
     return app
 
 

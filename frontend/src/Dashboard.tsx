@@ -7,6 +7,7 @@ import { EvidenceDialog } from "./EvidenceDialog";
 import { GuidanceDialog } from "./GuidanceDialog";
 import { Report } from "./Report";
 import { Questions } from "./Questions";
+import { InitializationProgress } from "./InitializationProgress";
 import { batchLabel, dateLabel, ErrorNotice, isFinished, Loading } from "./ui";
 export function Dashboard({
   api,
@@ -93,6 +94,7 @@ export function Dashboard({
         <h1>What should we improve?</h1>
         <p>Start with the issues customers mention most.</p>
       </div>
+      <InitializationProgress api={api} />
       <div className="analysis-toolbar">
         <div>
           {run ? (

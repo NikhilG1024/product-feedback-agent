@@ -12,6 +12,7 @@ import type {
   Run,
   Source,
   Submission,
+  InitializationProgressResponse,
 } from "./types";
 const messages: Record<string, string> = {
   historical_batch_required: "Choose a review group for past Amazon reviews.",
@@ -76,6 +77,11 @@ export const errorMessage = (error: unknown) =>
     : "Something went wrong. Please try again.";
 export class HttpApi implements Api {
   readonly demo = false;
+  summaryProgress(offset = 0) {
+    return this.request<InitializationProgressResponse>(
+      `/summary-initialization/progress?offset=${offset}&limit=20`,
+    );
+  }
   question(product: string, run: string, question: string) {
     return this.request<Answer>(
       `/products/${encodeURIComponent(product)}/questions`,
