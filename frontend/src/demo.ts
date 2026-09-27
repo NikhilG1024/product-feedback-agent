@@ -210,7 +210,7 @@ export class DemoApi implements Api {
     if (this.bodies.has(key)) {
       if (this.bodies.get(key) !== digest)
         throw new ApiError(409, "idempotency_conflict");
-      return clone(this.submissions.get(key)!);
+      return this.status(this.submissions.get(key)!.id);
     }
     const row: Submission = {
       id: crypto.randomUUID(),

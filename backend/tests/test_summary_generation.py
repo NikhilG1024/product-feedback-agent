@@ -173,6 +173,53 @@ def test_split_requests_checkpoint_each_validated_stage_and_resume():
     assert resumed.model_dump() == second
 
 
+def test_intermediate_checkpoint_cannot_cite_a_future_frozen_review():
+    reviews = [review("r1", "A" * 1100 + " same."), review("r2", "B" * 1100 + " same.")]
+    future = output([theme("one", "r2", "same.")])
+    provider = FakeProvider([future])
+    checkpoints = []
+    with pytest.raises(SummaryGenerationError, match="summary_unsupported_evidence"):
+        SummaryGenerator(provider, lookup, max_prompt_bytes=4300,
+                         save_checkpoint=checkpoints.append).generate(PRODUCT, None, reviews, [])
+    assert len(provider.messages) == 1
+    assert checkpoints == []
+
+
+def test_representative_compaction_handles_100_same_theme_updates_and_keeps_negative_report():
+    negative = theme("battery-negative", "old", "Battery failed after an hour.")
+    current = parent([negative], ["Owners report conflicting battery life."])
+    sources = {"old": review("old", "Battery failed after an hour.")}
+    class RotateProvider:
+        def generate_summary(self, messages, output_schema):
+            latest = json.loads(messages[1]["content"])["new_reviews"][0]
+            positive = theme("battery-positive", latest["id"], "Battery lasts all day.", "positive")
+            return output([negative, positive], ["Owners report conflicting battery life."])
+    provider = RotateProvider()
+    for index in range(100):
+        new = review(f"new-{index}", "Battery lasts all day.")
+        result = SummaryGenerator(provider,
+            lambda _product, ids: {identifier: sources[identifier] for identifier in ids}).generate(
+                PRODUCT, current, [new], [])
+        assert {t.id for t in result.themes} == {"battery-negative", "battery-positive"}
+        assert len([e for t in result.themes for e in t.evidence]) == 2
+        assert result.contradictions == ["Owners report conflicting battery life."]
+        sources[new["id"]] = new
+        current = current.model_copy(update={"version": index + 2, "parent_version": index + 1,
+            "narrative": result.narrative, "themes": result.themes,
+            "contradictions": result.contradictions})
+
+
+def test_old_review_cannot_gain_new_quote_from_raw_text_not_in_prior_supported_pairs():
+    old = parent([theme("battery", "old", "Battery failed after an hour.")])
+    extra = lambda _product, ids: {identifier: review(identifier,
+        "Battery failed after an hour. Also the case cracked.") for identifier in ids}
+    provider = FakeProvider([output([theme("battery", "old", "Also the case cracked."),
+                                      theme("new", "new", "Battery works well.")])])
+    with pytest.raises(SummaryGenerationError, match="summary_unsupported_evidence"):
+        SummaryGenerator(provider, extra).generate(PRODUCT, old,
+            [review("new", "Battery works well.")], [])
+
+
 @pytest.mark.parametrize("content,reason", [
     ("not json", "stop"), (json.dumps(output([theme("one", "r1", "first.")])), "length"),
 ])

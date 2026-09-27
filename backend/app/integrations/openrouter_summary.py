@@ -37,6 +37,7 @@ class OpenRouterSummaryModel:
 
     def generate_summary(self, messages: list[dict[str, str]], output_schema: type[BaseModel]) -> dict:
         if (not isinstance(messages, list) or len(messages) != 2
+                or any(not isinstance(item, dict) for item in messages)
                 or [item.get("role") for item in messages] != ["system", "user"]
                 or any(not isinstance(item.get("content"), str) for item in messages)):
             raise ProviderError("model_invalid_input")

@@ -113,10 +113,32 @@ it("retries the first history request when it fails", async () => {
   expect(await within(panel).findByRole("button", { name: /Version 1/ })).toBeInTheDocument();
 });
 
+it("does not open a newly selected product's history when prior history was open", async () => {
+  const api = new DemoApi();
+  const history = vi.spyOn(api, "summaryHistory");
+  const view = render(<SummaryDashboard api={api} product={headphone} />);
+  fireEvent.click(await screen.findByRole("button", { name: "View version history" }));
+  await waitFor(() => expect(history).toHaveBeenCalledWith(headphone.id));
+  view.rerender(<SummaryDashboard api={api} product={speaker} />);
+  expect(await screen.findByText(/Illustrative summary for Arc Portable Speaker/)).toBeInTheDocument();
+  expect(history).toHaveBeenCalledTimes(1);
+  expect(screen.getByRole("button", { name: "View version history" })).toBeInTheDocument();
+});
+
 it("keeps a demo review included in its original version after another publication", async () => {
   const api = new DemoApi();
   const first = await api.submit(headphone.id, { rating: 3, title: "First", text: "First report" }, "first");
   const second = await api.submit(headphone.id, { rating: 4, title: "Second", text: "Second report" }, "second");
   expect((await api.status(first.id)).summary).toEqual({ status: "included", version: 2 });
   expect((await api.status(second.id)).summary).toEqual({ status: "included", version: 3 });
+});
+
+it("replays a demo submission with its later published inclusion state", async () => {
+  const api = new DemoApi();
+  await api.summarySettings(headphone.id, 2);
+  const firstBody = { rating: 3, title: "First", text: "First report" };
+  const first = await api.submit(headphone.id, firstBody, "first-key");
+  expect(first.summary).toEqual({ status: "waiting", version: null });
+  await api.submit(headphone.id, { rating: 4, title: "Second", text: "Second report" }, "second-key");
+  expect((await api.submit(headphone.id, firstBody, "first-key")).summary).toEqual({ status: "included", version: 2 });
 });

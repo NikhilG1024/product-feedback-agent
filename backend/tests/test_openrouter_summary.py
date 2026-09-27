@@ -92,3 +92,10 @@ def test_multibyte_full_request_budget_rejects_without_truncation_or_network():
     with pytest.raises(ProviderError, match="model_input_too_large"):
         model.generate_summary(huge, GeneratedSummary)
     assert "🙂" * 18000 in huge[1]["content"]
+
+
+def test_non_dict_messages_are_sanitized_before_network():
+    model = OpenRouterSummaryModel("secret", transport=httpx.MockTransport(
+        lambda _: pytest.fail("invalid messages reached network")))
+    with pytest.raises(ProviderError, match="model_invalid_input"):
+        model.generate_summary([MESSAGES[0], "bad"], GeneratedSummary)
