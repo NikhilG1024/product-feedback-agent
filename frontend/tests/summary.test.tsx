@@ -1,5 +1,5 @@
 import { expect, it, vi } from "vitest";
-import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
+import { act, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { DemoApi } from "../src/demo";
 import { ApiError } from "../src/api";
 import { SummaryDashboard } from "../src/SummaryDashboard";
@@ -35,10 +35,32 @@ it("keeps a published version visible when a newer update fails", async () => {
 
 it("shows an explicit empty state before publication", async () => {
   const api = new DemoApi();
+  const progress = vi.spyOn(api, "summaryProgress");
   vi.spyOn(api, "summary").mockResolvedValue({ product_id: headphone.id, current: null, last_updated_at: null, update_threshold: 1,
     pending_review_count: 0, status: "uninitialized", error_code: null, memory_status: "pending" });
   render(<SummaryDashboard api={api} product={headphone} />);
   expect(await screen.findByText("No published summary yet.")).toBeInTheDocument();
+  expect(screen.queryByText("Product summary initialization")).not.toBeInTheDocument();
+  expect(progress).not.toHaveBeenCalled();
+});
+
+it("polls the selected product until its published summary appears", async () => {
+  vi.useFakeTimers();
+  try {
+    const api = new DemoApi();
+    Object.defineProperty(api, "demo", { value: false });
+    const published = await api.summary(headphone.id);
+    const empty: SummaryView = { ...published, current: null, last_updated_at: null, status: "uninitialized" };
+    const summary = vi.spyOn(api, "summary").mockResolvedValueOnce(empty).mockResolvedValue(published);
+    render(<SummaryDashboard api={api} product={headphone} />);
+    await act(async () => { await Promise.resolve(); });
+    expect(screen.getByText("No published summary yet.")).toBeInTheDocument();
+    await act(async () => { await vi.advanceTimersByTimeAsync(5000); });
+    expect(screen.getByText("Current published summary")).toBeInTheDocument();
+    expect(summary).toHaveBeenCalledTimes(2);
+  } finally {
+    vi.useRealTimers();
+  }
 });
 
 it("ignores obsolete product responses", async () => {

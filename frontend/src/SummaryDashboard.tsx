@@ -5,7 +5,14 @@ import { ErrorNotice, Loading } from "./ui";
 import { SummaryEvidence } from "./SummaryEvidence";
 import { SummaryHistory } from "./SummaryHistory";
 import { SummarySettings } from "./SummarySettings";
-import { InitializationProgress } from "./InitializationProgress";
+
+const SUMMARY_POLL_MS = 5000;
+
+function latestView(previous: SummaryView | null, next: SummaryView, product: string): SummaryView | null {
+  if (next.product_id !== product) return previous;
+  if (previous?.product_id === product && (previous.current?.version ?? 0) > (next.current?.version ?? 0)) return previous;
+  return next;
+}
 
 function coverageLabel(v: SummaryVersion) {
   return `Based on ${v.coverage.historical_sample_count} sampled historical review${v.coverage.historical_sample_count === 1 ? "" : "s"} + ${v.coverage.new_review_count} new review${v.coverage.new_review_count === 1 ? "" : "s"}`;
@@ -59,15 +66,35 @@ export function SummaryDashboard({ api, product, reviewVersion = 0 }: { api: Api
     const id = ++requestId.current;
     setView(null); setSelectedVersion(null); setHistorical(null); setHistoryProduct(null); setLoading(true); setError(""); setRefreshBusy(false); setRefreshError("");
     refreshAttempt.current = null;
-    api.summary(product.id).then((next) => { if (id === requestId.current) setView(next); })
+    api.summary(product.id).then((next) => { if (id === requestId.current) setView((previous) => latestView(previous, next, product.id)); })
       .catch((e) => { if (id === requestId.current) setError(errorMessage(e)); })
       .finally(() => { if (id === requestId.current) setLoading(false); });
     return () => { requestId.current++; };
   }, [api, product.id]);
   useEffect(() => {
+    if (api.demo) return;
+    let cancelled = false;
+    let timer: ReturnType<typeof setTimeout>;
+    async function poll() {
+      try {
+        const next = await api.summary(product.id);
+        if (!cancelled) {
+          setView((previous) => latestView(previous, next, product.id));
+          if (next.product_id === product.id) setError("");
+        }
+      } catch (e) {
+        if (!cancelled) setError(errorMessage(e));
+      } finally {
+        if (!cancelled) timer = setTimeout(poll, SUMMARY_POLL_MS);
+      }
+    }
+    timer = setTimeout(poll, SUMMARY_POLL_MS);
+    return () => { cancelled = true; clearTimeout(timer); };
+  }, [api, product.id]);
+  useEffect(() => {
     if (!reviewVersion) return;
     const id = requestId.current;
-    api.summary(product.id).then((next) => { if (id === requestId.current) setView(next); })
+    api.summary(product.id).then((next) => { if (id === requestId.current) setView((previous) => latestView(previous, next, product.id)); })
       .catch((e) => { if (id === requestId.current) setError(errorMessage(e)); });
   }, [reviewVersion, api, product.id]);
   useEffect(() => {
@@ -82,7 +109,7 @@ export function SummaryDashboard({ api, product, reviewVersion = 0 }: { api: Api
   async function retryLoad() {
     const id = ++requestId.current;
     setLoading(true); setError("");
-    try { const next = await api.summary(product.id); if (id === requestId.current) setView(next); }
+    try { const next = await api.summary(product.id); if (id === requestId.current) setView((previous) => latestView(previous, next, product.id)); }
     catch (e) { if (id === requestId.current) setError(errorMessage(e)); }
     finally { if (id === requestId.current) setLoading(false); }
   }
@@ -93,7 +120,7 @@ export function SummaryDashboard({ api, product, reviewVersion = 0 }: { api: Api
     setRefreshBusy(true); setRefreshError("");
     try {
       const next = await api.refreshSummary(product.id, "pending_reviews", refreshAttempt.current.key);
-      if (id === requestId.current && next.product_id === product.id) { setView(next); refreshAttempt.current = null; }
+      if (id === requestId.current && next.product_id === product.id) { setView((previous) => latestView(previous, next, product.id)); refreshAttempt.current = null; }
     } catch (e) {
       if (id === requestId.current) {
         setRefreshError(errorMessage(e));
@@ -103,7 +130,7 @@ export function SummaryDashboard({ api, product, reviewVersion = 0 }: { api: Api
   }
   const version = selectedVersion === null ? view?.current : historical;
   return <div className="summary-dashboard">
-    <div className="heading"><h1>Customer feedback</h1><p>Published product summary and the evidence behind it.</p></div>
+    <div className="heading"><h1>{product.title}</h1><p>Published customer feedback and the evidence behind it.</p></div>
     {!view && loading && <Loading>Loading product summary…</Loading>}
     {error && <ErrorNotice message={error} retry={() => void retryLoad()} />}
     {view && <>
@@ -113,8 +140,8 @@ export function SummaryDashboard({ api, product, reviewVersion = 0 }: { api: Api
         <span>Memory sync: {view.memory_status}</span>
       </div>
       {view.status === "failed" && <ErrorNotice message={`Summary update failed${view.error_code ? ` (${view.error_code})` : ""}. The last published version remains available.`} />}
-      {view.status === "uninitialized" && !view.current && <section className="empty-state"><h2>No published summary yet.</h2><p>Initialization is still needed for this product. Check back after the summary has passed review and publication.</p></section>}
-      {!view.current && view.status !== "uninitialized" && <section className="empty-state"><h2>No published summary available.</h2><p>Status: {view.status}. Check again later.</p></section>}
+      {view.status === "uninitialized" && !view.current && <section className="empty-state"><h2>No published summary yet.</h2><p>A reviewed summary is being prepared for this product. This page updates when it is published.</p></section>}
+      {!view.current && view.status !== "uninitialized" && <section className="empty-state"><h2>No published summary available.</h2><p>Status: {view.status}. This page updates when a summary is published.</p></section>}
       {view.current && <>
         <div className="summary-actions"><button className="button" disabled={refreshBusy || view.pending_review_count === 0} onClick={() => void refresh()}>{refreshBusy ? "Requesting…" : refreshAttempt.current ? "Retry update request" : "Update now"}</button>
           <button className="text-button" onClick={() => void retryLoad()}>Check for updates</button></div>
@@ -135,6 +162,5 @@ export function SummaryDashboard({ api, product, reviewVersion = 0 }: { api: Api
       </>}
       <SummarySettings api={api} product={product.id} value={view.update_threshold} onChanged={setView} />
     </>}
-    <InitializationProgress api={api} />
   </div>;
 }
