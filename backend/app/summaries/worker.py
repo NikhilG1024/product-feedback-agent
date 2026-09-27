@@ -146,6 +146,10 @@ class SummaryWorker:
                 refresh_ids = self.repository.pending_refresh_ids(claim)
                 candidate_guidance = self._guidance(claim,
                     {str(row["_id"]) for row in prospective_reviews}, refresh_ids)
+                if not prospective_reviews and not candidate_guidance and refresh_ids:
+                    if not self.repository.complete_noop(claim, refresh_ids, self.clock()):
+                        raise SummaryGenerationError("summary_claim_lost")
+                    return True
                 frozen = self.repository.freeze(claim, [], [item["id"] for item in candidate_guidance],
                                                 refresh_ids=refresh_ids)
                 frozen_guidance = {item["id"]: item for item in candidate_guidance}

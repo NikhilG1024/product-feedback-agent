@@ -491,6 +491,38 @@ class SummaryRepository:
         return FrozenUpdate(claim.product_id, claim.job_id, claim.parent_version,
                             version, ids, list(guidance_ids), refresh_ids)
 
+    def complete_noop(self, claim, refresh_ids, now) -> bool:
+        """Fence and consume refresh-only work that adds no summary content."""
+        state = self._owned(claim, now)
+        if (state is None or claim.parent_version is None or not refresh_ids or
+                state["job"].get("review_ids") not in (None, []) or
+                state["job"].get("guidance_ids") not in (None, []) or
+                self.versions.find_one({"product_id": claim.product_id, "job_id": claim.job_id}) or
+                self._pending_count(claim.product_id, boundary=state["job"]["boundary"])):
+            return False
+        if len(refresh_ids) > 20 or len(refresh_ids) != len(set(refresh_ids)):
+            raise ValueError("invalid no-op refresh batch")
+        rows = list(self.inputs.find({**self._refresh_query(claim.product_id, state["job"]["boundary"]),
+                                      "review_id": {"$in": refresh_ids}})
+                    .sort("admission_sequence", 1))
+        if [row["review_id"] for row in rows] != list(refresh_ids):
+            return False
+        remaining_refresh = self.inputs.count_documents({
+            **self._refresh_query(claim.product_id, state["job"]["boundary"]),
+            "review_id": {"$nin": refresh_ids}})
+        drain_boundary = state.get("drain_boundary") if remaining_refresh else None
+        updated = self.states.update_one({"_id": claim.product_id,
+            "current_version": claim.parent_version, "job.owner_token": claim.owner_token,
+            "job.job_id": claim.job_id, "job.lease_expires_at": {"$gt": now}},
+            {"$set": {"job": None, "status": "ready", "drain_boundary": drain_boundary},
+             "$unset": {"error_code": "", "next_attempt_at": ""}})
+        if updated.matched_count != 1:
+            return False
+        self.inputs.update_many({"product_id": claim.product_id,
+            "review_id": {"$in": refresh_ids}, "incorporated_version": None},
+            {"$set": {"incorporated_version": claim.parent_version}})
+        return True
+
     def stage(self, claim, version) -> str:
         state = self._owned(claim)
         if state is None or state["job"].get("review_ids") is None:

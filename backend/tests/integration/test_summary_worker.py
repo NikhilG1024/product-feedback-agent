@@ -317,3 +317,42 @@ def test_late_insert_at_reserved_sequence_is_not_consumed_without_guidance(setup
     assert repo.pending_refresh_ids(claim) == refresh_ids  # Frozen snapshot is stable.
     assert database.product_summary_inputs.find_one({"review_id":
         "_refresh:decision:late-sequence"})["incorporated_version"] is None
+
+
+def test_redundant_refresh_completes_without_model_or_new_version(setup):
+    database, repo = setup
+    publish_empty_initial(repo)
+    provider = Provider()
+    worker = SummaryWorker(database, repo, provider, memory=Memory())
+    repo.request_refresh("P", "already-covered", "pending_reviews")
+    assert worker.tick() is True
+    assert provider.calls == 0
+    assert repo.current("P").current.version == 1
+    assert repo.current("P").status == "ready"
+    assert repo.versions.count_documents({"product_id": "P"}) == 1
+    assert repo.inputs.find_one({"review_id": "_refresh:already-covered"})["incorporated_version"] == 1
+    assert worker.tick() is False
+    assert repo.states.find_one({"_id": "P"})["drain_boundary"] is None
+    repo.admit_review({"_id": "later-review", "parent_asin": "P", "source": "user_submission",
+                       "timestamp": datetime.now(timezone.utc), "text": "Later feedback"})
+    assert repo.claim("P", datetime.now(timezone.utc), 180) is not None
+
+
+def test_failed_frozen_no_input_refresh_recovers_as_noop(setup):
+    database, repo = setup
+    publish_empty_initial(repo)
+    repo.request_refresh("P", "retry-covered", "pending_reviews")
+    now = datetime.now(timezone.utc)
+    claim = repo.claim("P", now, 180)
+    frozen = repo.freeze(claim, [], [])
+    assert frozen.review_ids == [] and frozen.guidance_ids == []
+    repo.fail(claim, "summary_no_inputs", now)
+    repo.states.update_one({"_id": "P"}, {"$set": {"next_attempt_at": now}})
+    provider = Provider()
+    worker = SummaryWorker(database, repo, provider, memory=Memory())
+    assert worker.tick() is True
+    assert provider.calls == 0
+    assert repo.current("P").current.version == 1
+    assert repo.current("P").status == "ready"
+    assert repo.versions.count_documents({"product_id": "P"}) == 1
+    assert repo.inputs.find_one({"review_id": "_refresh:retry-covered"})["incorporated_version"] == 1
