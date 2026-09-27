@@ -8,6 +8,7 @@ from pathlib import Path
 MAX_PROGRESS_BYTES = 512_000
 STATUSES = {"queued", "generating", "citation_checks_passed", "reused", "needs_review"}
 DONE = {"citation_checks_passed", "reused"}
+PAUSE_EXPLANATION = "Generation is paused for quality review. Remaining products are queued."
 
 
 def _count(value: object) -> int:
@@ -47,7 +48,7 @@ def read_progress(path: str, stale_seconds: int, *, now: datetime | None = None)
         if updated < started or (updated - current).total_seconds() > 60:
             return unavailable
         status = source_data["status"]
-        if status not in {"running", "completed", "completed_with_failures"}:
+        if status not in {"running", "completed", "completed_with_failures", "paused_quality_review"}:
             return unavailable
         counts = {name: _count(source_data[name]) for name in ("total", "workers", "completed", "failed", "active", "queued")}
         if counts["workers"] < 1 or counts["workers"] > 1000:
@@ -78,13 +79,17 @@ def read_progress(path: str, stale_seconds: int, *, now: datetime | None = None)
                 sum(item["status"] == "generating" for item in items) != counts["active"] or
                 sum(item["status"] == "queued" for item in items) != counts["queued"]):
             return unavailable
-        if status != "running" and (counts["active"] or counts["queued"]):
+        if status == "paused_quality_review" and counts["active"]:
+            return unavailable
+        if status in {"completed", "completed_with_failures"} and (counts["active"] or counts["queued"]):
             return unavailable
         if status == "completed" and counts["failed"]:
             return unavailable
         items.sort(key=lambda item: item["id"])
         progress = {"run_id": run_id, "started_at": started.isoformat(), "updated_at": updated.isoformat(),
                     "status": status, **counts, "published": None, "products": items}
+        if status == "paused_quality_review":
+            progress["pause_explanation"] = PAUSE_EXPLANATION
         elapsed = source_data.get("elapsed_seconds")
         if elapsed is not None:
             if type(elapsed) not in (int, float) or not 0 <= elapsed <= 1_000_000:

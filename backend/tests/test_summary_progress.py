@@ -78,3 +78,30 @@ def test_deeply_nested_json_is_unavailable_instead_of_server_error(tmp_path, set
     response = get(client)
     assert response.status_code == 200
     assert response.json() == {"availability": "unavailable", "progress": None}
+
+
+def test_quality_review_pause_keeps_queued_count_and_sanitizes_reason(tmp_path, settings):
+    path = tmp_path / "progress.json"
+    paused = payload(datetime.now(timezone.utc))
+    paused.update(status="paused_quality_review", active=0, queued=1,
+                  pause_reason="Reviewer failed at /private/secret/path")
+    paused["products"]["B2"]["status"] = "queued"
+    path.write_text(json.dumps(paused))
+    client = TestClient(create_app(replace(settings, summary_initialization_progress_path=str(path))))
+    response = get(client)
+    assert response.status_code == 200
+    progress = response.json()["progress"]
+    assert progress["status"] == "paused_quality_review"
+    assert progress["queued"] == 1
+    assert progress["active"] == 0
+    assert progress["pause_explanation"] == "Generation is paused for quality review. Remaining products are queued."
+    assert "/private/secret/path" not in response.text
+
+
+def test_quality_review_pause_rejects_active_products(tmp_path, settings):
+    path = tmp_path / "progress.json"
+    paused = payload(datetime.now(timezone.utc))
+    paused["status"] = "paused_quality_review"
+    path.write_text(json.dumps(paused))
+    client = TestClient(create_app(replace(settings, summary_initialization_progress_path=str(path))))
+    assert get(client).json() == {"availability": "unavailable", "progress": None}
