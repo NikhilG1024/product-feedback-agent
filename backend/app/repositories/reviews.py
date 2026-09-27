@@ -44,6 +44,44 @@ class ReviewRepository:
         if clauses: query['$and']=clauses
         return list(self.database.reviews.find(query).sort([('timestamp',1),('_id',1)]).limit(limit+1))
 
+    def feed(self, product_id, author_id, source, batch_id, sentiment, rating, sort, after, limit):
+        """Keyset-page the product feed; computed ranks keep submissions visible."""
+        query={'parent_asin':product_id}
+        if author_id is not None: query.update(author_id=author_id,source='user_submission')
+        elif source=='amazon_2023': query['$or']=[{'source':'amazon_2023'},{'source':{'$exists':False}}]
+        elif source is not None: query['source']=source
+        if batch_id is not None: query['batch_id']=batch_id
+        band=({'negative':{'$gte':1,'$lte':2},'neutral':3,
+               'positive':{'$gte':4,'$lte':5}}.get(sentiment))
+        if rating is not None and band is not None:
+            query['$and']=[{'rating':rating},{'rating':band}]
+        elif rating is not None: query['rating']=rating
+        elif band is not None: query['rating']=band
+        pipeline=[{'$match':query}]
+        if sort=='priority':
+            pipeline.append({'$addFields':{
+                '_feed_source':{'$cond':[{'$eq':['$source','user_submission']},0,1]},
+                '_feed_sentiment':{'$switch':{'branches':[
+                    {'case':{'$lte':['$rating',2]},'then':0},
+                    {'case':{'$eq':['$rating',3]},'then':1}], 'default':2}}}})
+            if after:
+                source_rank,sentiment_rank,stamp,record_id=after
+                pipeline.append({'$match':{'$or':[
+                    {'_feed_source':{'$gt':source_rank}},
+                    {'_feed_source':source_rank,'_feed_sentiment':{'$gt':sentiment_rank}},
+                    {'_feed_source':source_rank,'_feed_sentiment':sentiment_rank,'timestamp':{'$lt':stamp}},
+                    {'_feed_source':source_rank,'_feed_sentiment':sentiment_rank,'timestamp':stamp,'_id':{'$lt':record_id}}]}})
+            order=[('_feed_source',1),('_feed_sentiment',1),('timestamp',-1),('_id',-1)]
+        else:
+            if after:
+                stamp,record_id=after
+                pipeline.append({'$match':{'$or':[
+                    {'timestamp':{'$lt':stamp}},
+                    {'timestamp':stamp,'_id':{'$lt':record_id}}]}})
+            order=[('timestamp',-1),('_id',-1)]
+        pipeline.extend([{'$sort':dict(order)},{'$limit':limit+1}])
+        return list(self.database.reviews.aggregate(pipeline))
+
     def create_submission(self, product_id, author_id, key, payload, digest, now):
         document={'_id':str(uuid4()),'source':'user_submission','parent_asin':product_id,'asin':payload.asin or product_id,
                   'title':payload.title,'text':payload.text,'rating':payload.rating,'timestamp':now,'timestamp_ms':int(now.timestamp()*1000),

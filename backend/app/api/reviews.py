@@ -72,5 +72,9 @@ def status(review_id: str, principal: Principal=Depends(require_principal), revi
     return reviews.status(review_id,principal)
 
 @router.get('/products/{product_id}/reviews',response_model=ReviewPage)
-def list_reviews(product_id: str, source: str | None=None, batch_id: str | None=None, cursor: str | None=None, limit: int=Query(20,ge=1,le=100), principal: Principal=Depends(require_principal), reviews=Depends(service)):
-    return reviews.list(product_id,principal,source,batch_id,cursor,limit)
+def list_reviews(product_id: str, source: str | None=None, batch_id: str | None=None, cursor: str | None=None,
+                 limit: int=Query(20,ge=1,le=100), sentiment: str | None=None,
+                 rating: int | None=Query(None,ge=1,le=5), sort: str | None=None,
+                 principal: Principal=Depends(require_principal), reviews=Depends(service)):
+    return reviews.list(product_id,principal,source,batch_id,cursor,limit,
+                        sentiment=sentiment,rating=rating,sort=sort)

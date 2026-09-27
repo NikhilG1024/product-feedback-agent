@@ -9,6 +9,7 @@ import type {
   Product,
   Review,
   ReviewInput,
+  ReviewListOptions,
   Run,
   Source,
   Submission,
@@ -162,11 +163,14 @@ export class HttpApi implements Api {
     if (cursor) q.set("cursor", cursor);
     return this.request<Page<Product>>("/products?" + q);
   }
-  reviews(product: string, source?: Source, batch?: string, cursor?: string) {
-    const q = new URLSearchParams({ limit: "100" });
+  reviews(product: string, source?: Source, batch?: string, cursor?: string, options?: ReviewListOptions) {
+    const q = new URLSearchParams({ limit: String(options?.limit ?? 100) });
     if (source) q.set("source", source);
     if (batch) q.set("batch_id", batch);
     if (cursor) q.set("cursor", cursor);
+    if (options?.sentiment) q.set("sentiment", options.sentiment);
+    if (options?.rating) q.set("rating", String(options.rating));
+    if (options?.sort) q.set("sort", options.sort);
     return this.request<Page<Review>>(
       `/products/${encodeURIComponent(product)}/reviews?${q}`,
     );

@@ -7,6 +7,7 @@ import type {
   Finding,
   Review,
   ReviewInput,
+  ReviewListOptions,
   Run,
   Source,
   Submission,
@@ -181,16 +182,12 @@ export class DemoApi implements Api {
   }
   async reviews(
     product: string,
-    source: Source = "amazon_2023",
+    source?: Source,
     batch?: string,
+    cursor?: string,
+    options?: ReviewListOptions,
   ) {
-    if (source === "user_submission")
-      return {
-        items: clone(this.newReviews.filter((r) => r.parent_asin === product)),
-        next_cursor: null,
-      };
-    return {
-      items: [0, 1, 2, 3].map((i): Review => ({
+    const historical = [0, 1, 2, 3].map((i): Review => ({
         id: `${product}-review-${i}`,
         parent_asin: product,
         asin: product,
@@ -198,12 +195,22 @@ export class DemoApi implements Api {
         text: quotes[product][i],
         rating: 3,
         timestamp: "2023-06-12T00:00:00Z",
-        source,
+        source: "amazon_2023",
         batch_id: batch || "demo:B",
         processing: null,
-      })),
-      next_cursor: null,
-    };
+      }));
+    const rows = [...historical, ...this.newReviews.filter((r) => r.parent_asin === product)]
+      .filter((r) => (!source || r.source === source) && (!batch || r.batch_id === batch))
+      .filter((r) => !options?.rating || r.rating === options.rating)
+      .filter((r) => !options?.sentiment || (options.sentiment === "negative" ? r.rating <= 2 : options.sentiment === "positive" ? r.rating >= 4 : r.rating === 3));
+    if (options?.sort === "priority") rows.sort((a, b) =>
+      Number(b.source === "user_submission") - Number(a.source === "user_submission") ||
+      (a.rating <= 2 ? 0 : a.rating === 3 ? 1 : 2) - (b.rating <= 2 ? 0 : b.rating === 3 ? 1 : 2) ||
+      b.timestamp.localeCompare(a.timestamp) || a.id.localeCompare(b.id));
+    else if (options?.sort === "newest") rows.sort((a, b) => b.timestamp.localeCompare(a.timestamp) || a.id.localeCompare(b.id));
+    const start = cursor ? Math.max(0, rows.findIndex((r) => r.id === cursor) + 1) : 0;
+    const limit = options?.limit ?? 100;
+    return { items: clone(rows.slice(start, start + limit)), next_cursor: rows[start + limit] ? rows[start + limit - 1].id : null };
   }
   async submit(product: string, body: ReviewInput, key: string) {
     const digest = JSON.stringify({ product, body });

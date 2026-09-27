@@ -30,7 +30,7 @@ it("keeps a published version visible when a newer update fails", async () => {
   render(<SummaryDashboard api={api} product={headphone} />);
   expect(await screen.findByText(/Current published summary/)).toBeInTheDocument();
   expect(screen.getByText(/Summary update failed/)).toBeInTheDocument();
-  expect(screen.getByRole("heading", { name: "Battery loses capacity" })).toBeInTheDocument();
+  expect(screen.getByText(/Illustrative summary for Forma Studio Wireless/)).toBeInTheDocument();
 });
 
 it("shows an explicit empty state before publication", async () => {
@@ -58,7 +58,8 @@ it("shows a generated initial candidate without treating it as published", async
   expect(await screen.findByText("Generated initial summary")).toBeInTheDocument();
   expect(screen.getByText("Validation pending")).toBeInTheDocument();
   expect(screen.getByText(/Based on 4 sampled historical reviews \+ 0 new reviews/)).toBeInTheDocument();
-  expect(screen.getByRole("region", { name: "Evidence for version 3" })).toBeInTheDocument();
+  expect(screen.queryByText("Summary evidence")).not.toBeInTheDocument();
+  expect(await screen.findByRole("region", { name: "Product reviews" })).toHaveTextContent("What reviewers said");
   expect(screen.getByText(/New reviews will be incorporated after the initial summary is published/)).toBeInTheDocument();
   expect(screen.queryByText("No published summary yet.")).not.toBeInTheDocument();
   expect(screen.queryByText("Current published summary")).not.toBeInTheDocument();
@@ -155,7 +156,7 @@ it("uses the same key after an uncertain refresh response", async () => {
   expect(refresh.mock.calls[0][2]).toBe(refresh.mock.calls[1][2]);
 });
 
-it("paginates history and binds evidence and questions to the selected version", async () => {
+it("paginates history and binds questions to the selected version", async () => {
   const api = new DemoApi();
   for (let i = 0; i < 3; i++) {
     await api.submit(headphone.id, { rating: 3, title: `Review ${i}`, text: `Review text ${i}` }, `key-${i}`);
@@ -168,7 +169,7 @@ it("paginates history and binds evidence and questions to the selected version",
   expect(await within(history).findByRole("button", { name: /Version 1/ })).toBeInTheDocument();
   fireEvent.click(within(history).getByRole("button", { name: /Version 1/ }));
   expect(await screen.findByText("Historical version 1")).toBeInTheDocument();
-  expect(screen.getByRole("region", { name: "Evidence for version 1" })).toHaveTextContent("demo-headphones-review-0");
+  expect(screen.queryByRole("region", { name: "Product reviews" })).not.toBeInTheDocument();
   expect(screen.queryByText(/Guidance used in this version:/)).not.toBeInTheDocument();
   fireEvent.change(screen.getByRole("textbox", { name: "Question" }), { target: { value: "How is the battery?" } });
   fireEvent.click(screen.getByRole("button", { name: "Ask" }));

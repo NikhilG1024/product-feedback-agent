@@ -8,6 +8,7 @@ from pymongo import MongoClient
 from fastapi.testclient import TestClient
 from app.main import create_app
 from app.domain import Principal, ReviewInput
+from datetime import datetime, timedelta, timezone
 
 @pytest.fixture
 def database():
@@ -113,3 +114,59 @@ def test_valid_variant_and_default_parent_identity(api,database):
     assert database.reviews.find_one({})['asin']=='V'
     second=api.post('/api/v1/products/P/reviews',headers={**HEADERS,'Idempotency-Key':'second'},json=PAYLOAD)
     assert database.reviews.find_one({'_id':second.json()['id']})['asin']=='P'
+
+
+def test_pm_priority_feed_includes_unsummarized_submissions_and_pages_stably(service,database):
+    pm=Principal(user_id='pm',role='pm')
+    stamp=datetime(2026,1,1,tzinfo=timezone.utc)
+    for identifier,rating,source,minutes in [
+        ('old-negative',1,'amazon_2023',4),('old-negative-z',2,'amazon_2023',4),
+        ('new-negative',2,'user_submission',1),
+        ('new-neutral',3,'user_submission',2),('old-positive',5,'amazon_2023',5),
+        ('new-positive',4,'user_submission',3),('old-neutral',3,'amazon_2023',6)]:
+        document={'_id':identifier,'parent_asin':'P','asin':'P',
+            'title':identifier,'text':'Actual feedback '+identifier,'rating':rating,
+            'timestamp':stamp+timedelta(minutes=minutes),
+            'timestamp_ms':int((stamp+timedelta(minutes=minutes)).timestamp()*1000),
+            'provenance':{'kind':'test'}}
+        if source=='user_submission':
+            document.update(source=source,created_at=stamp,author_id='private-owner',
+                version=1,processing={'status':'pending','attempts':0},
+                idempotency_key=identifier,payload_digest='test-digest')
+        else:
+            document.update(source=source,batch='A',batch_id='test:A',held_out=False,dataset_id='test')
+        database.reviews.insert_one(document)
+    seen=[]; cursor=None
+    while True:
+        page=service.list('P',pm,None,None,cursor,2,sort='priority')
+        seen.extend(item['id'] for item in page['items'])
+        assert all('author_id' not in item for item in page['items'])
+        cursor=page['next_cursor']
+        if cursor is None: break
+    assert seen==['new-negative','new-neutral','new-positive','old-negative-z','old-negative','old-neutral','old-positive']
+    assert service.list('P',pm,None,None,None,10,sort='newest')['items'][0]['id']=='old-neutral'
+    assert [r['id'] for r in service.list('P',pm,None,None,None,10,sentiment='negative')['items']]==['new-negative','old-negative-z','old-negative']
+    assert [r['id'] for r in service.list('P',pm,None,None,None,10,rating=4)['items']]==['new-positive']
+    assert service.list('P',pm,None,None,None,10,sentiment='positive',rating=1)['items']==[]
+    assert [r['id'] for r in service.list('P',pm,None,None,None,10,sentiment='positive',rating=4)['items']]==['new-positive']
+    cursor=service.list('P',pm,None,None,None,1,sort='priority')['next_cursor']
+    from app.errors import ServiceError
+    with pytest.raises(ServiceError) as error:
+        service.list('P',pm,None,None,cursor,1,sort='newest')
+    assert error.value.status_code==422
+
+
+def test_review_feed_api_rejects_bad_filters_and_cursor_scope(api,database):
+    pm={'Authorization':'Bearer pm-secret-value'}
+    for path in ('?sentiment=bad','?rating=0','?rating=6','?sort=oldest'):
+        assert api.get('/api/v1/products/P/reviews'+path,headers=pm).status_code==422
+    stamp=datetime.now(timezone.utc)
+    database.reviews.insert_one({'_id':'r1','parent_asin':'P','asin':'P','title':'Issue',
+        'text':'It failed','rating':1,'timestamp':stamp,'timestamp_ms':int(stamp.timestamp()*1000),
+        'source':'user_submission','author_id':'private-owner','created_at':stamp,
+        'version':1,'provenance':{'kind':'test'},'processing':{'status':'pending','attempts':0},
+        'idempotency_key':'r1','payload_digest':'test-digest'})
+    page=api.get('/api/v1/products/P/reviews?sort=priority&limit=1',headers=pm)
+    assert page.status_code==200
+    assert page.json()['items'][0]['id']=='r1'
+    assert 'author_id' not in page.text

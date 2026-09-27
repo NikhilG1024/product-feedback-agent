@@ -61,6 +61,12 @@ export interface Review extends ReviewInput {
   batch_id: string | null;
   processing: Processing | null;
 }
+export interface ReviewListOptions {
+  sentiment?: "positive" | "neutral" | "negative";
+  rating?: 1 | 2 | 3 | 4 | 5;
+  sort?: "priority" | "newest";
+  limit?: number;
+}
 export interface Scope {
   sample_size?: 5 | null;
   source: Source;
@@ -147,6 +153,7 @@ export interface Api {
     source?: Source,
     batch?: string,
     cursor?: string,
+    options?: ReviewListOptions,
   ): Promise<Page<Review>>;
   submit(product: string, body: ReviewInput, key: string): Promise<Submission>;
   status(id: string): Promise<Submission>;

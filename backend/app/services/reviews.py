@@ -23,6 +23,30 @@ def cursor_decode(cursor):
         raise ServiceError('invalid_cursor',422) from None
 
 
+def feed_cursor_encode(row, sort, source, batch_id, sentiment, rating):
+    key=([row['_feed_source'],row['_feed_sentiment']] if sort=='priority' else [])+[row['timestamp'].isoformat(),row['_id']]
+    data={'v':2,'sort':sort,'source':source,'batch_id':batch_id,'sentiment':sentiment,'rating':rating,'key':key}
+    return base64.urlsafe_b64encode(json.dumps(data,separators=(',',':')).encode()).decode()
+
+
+def feed_cursor_decode(cursor, sort, source, batch_id, sentiment, rating):
+    try:
+        if len(cursor)>2048: raise ValueError()
+        data=json.loads(base64.b64decode(cursor,altchars=b'-_',validate=True))
+        if (not isinstance(data,dict) or data.get('v')!=2 or
+                any(data.get(k)!=v for k,v in {'sort':sort,'source':source,'batch_id':batch_id,
+                    'sentiment':sentiment,'rating':rating}.items())): raise ValueError()
+        key=data['key']
+        if not isinstance(key,list) or len(key)!=(4 if sort=='priority' else 2): raise ValueError()
+        if sort=='priority':
+            if type(key[0]) is not int or key[0] not in (0,1) or type(key[1]) is not int or key[1] not in (0,1,2): raise ValueError()
+        stamp=datetime.fromisoformat(key[-2])
+        if stamp.tzinfo is None or not isinstance(key[-1],str) or not key[-1]: raise ValueError()
+        return (*key[:2],stamp,key[-1]) if sort=='priority' else (stamp,key[-1])
+    except (ValueError,TypeError,KeyError,UnicodeError):
+        raise ServiceError('invalid_cursor',422) from None
+
+
 def public_review(row):
     return {'id':row['_id'],'parent_asin':row['parent_asin'],'asin':row['asin'],'title':row['title'],'text':row['text'],
             'rating':row['rating'],'timestamp':row['timestamp'],'source':row.get('source','amazon_2023'),
@@ -85,14 +109,24 @@ class ReviewService:
         return {'id':row['_id'],'processing':row.get('processing'),
                 'summary':self._summary_status(row)}
 
-    def list(self, product_id: str, principal: Principal, source: str | None, batch_id: str | None, cursor: str | None, limit: int) -> dict:
+    def list(self, product_id: str, principal: Principal, source: str | None, batch_id: str | None, cursor: str | None, limit: int,
+             *, sentiment: str | None=None, rating: int | None=None, sort: str | None=None) -> dict:
         if not 1<=limit<=100: raise ServiceError('invalid_page_size',422)
         if self.repository.product(product_id) is None: raise ServiceError('product_not_found',404)
         if source not in (None,'amazon_2023','user_submission'): raise ServiceError('invalid_source',422)
+        if sentiment not in (None,'positive','neutral','negative'): raise ServiceError('invalid_sentiment',422)
+        if rating is not None and (type(rating) is not int or not 1<=rating<=5): raise ServiceError('invalid_rating',422)
+        if sort not in (None,'priority','newest'): raise ServiceError('invalid_sort',422)
         author_id=principal.user_id if principal.role!='pm' else None
-        after=cursor_decode(cursor) if cursor else None
-        rows=self.repository.list(product_id,author_id,source,batch_id,after,limit)
-        next_cursor=cursor_encode(rows[limit-1]['timestamp'],rows[limit-1]['_id']) if len(rows)>limit else None
+        feed_sort=sort or ('priority' if sentiment is not None or rating is not None else None)
+        if feed_sort is None:
+            after=cursor_decode(cursor) if cursor else None
+            rows=self.repository.list(product_id,author_id,source,batch_id,after,limit)
+            next_cursor=cursor_encode(rows[limit-1]['timestamp'],rows[limit-1]['_id']) if len(rows)>limit else None
+        else:
+            after=feed_cursor_decode(cursor,feed_sort,source,batch_id,sentiment,rating) if cursor else None
+            rows=self.repository.feed(product_id,author_id,source,batch_id,sentiment,rating,feed_sort,after,limit)
+            next_cursor=feed_cursor_encode(rows[limit-1],feed_sort,source,batch_id,sentiment,rating) if len(rows)>limit else None
         return {'items':[public_review(r) for r in rows[:limit]],'next_cursor':next_cursor}
 
     def products(self, cursor, limit):

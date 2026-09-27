@@ -1223,10 +1223,24 @@ fieldset:disabled {
 .summary-evidence blockquote { line-height: 1.7; margin: 14px 0 0; white-space: pre-wrap; overflow-wrap: anywhere; }
 .summary-evidence cite { font-style: normal; margin-top: 6px; }
 .summary-settings { max-width: 460px; }
+.review-feed { background: white; border: 1px solid var(--line); border-radius: 12px; padding: 24px; margin: 20px 0; }
+.review-feed .section-heading { margin-bottom: 16px; }
+.review-feed .section-heading p { margin: 5px 0 0; }
+.review-feed-controls, .review-sentiments, .review-feed-meta { display: flex; align-items: center; flex-wrap: wrap; gap: 9px; }
+.review-feed-controls { margin-bottom: 12px; }
+.review-feed-controls label { display: flex; align-items: center; gap: 6px; font-size: 12px; }
+.review-feed-controls select { min-height: 36px; border: 1px solid var(--line); border-radius: 7px; background: white; padding: 5px 8px; }
+.review-sentiments .button { padding: 7px 11px; }
+.review-sentiments .active { border-color: var(--blue); color: var(--blue); background: #eef3ff; }
+.review-feed-list { display: grid; gap: 12px; margin: 18px 0; }
+.review-feed-card { border: 1px solid var(--line); border-radius: 9px; padding: 16px; overflow-wrap: anywhere; }
+.review-feed-card h3 { margin: 10px 0 6px; font-size: 15px; }
+.review-feed-card p { margin: 0; line-height: 1.55; white-space: pre-wrap; }
+.review-feed-meta { font-size: 11px; color: var(--muted); }
 .summary-settings .field { margin: 0 0 15px; }
 .summary-questions form { display: flex; align-items: end; gap: 12px; }
 .summary-questions .field { flex: 1; margin: 0; }
-@media (max-width: 760px) { .published-summary, .summary-history, .summary-settings { padding: 19px; } .summary-questions form { align-items: stretch; flex-direction: column; } }
+@media (max-width: 760px) { .published-summary, .summary-history, .summary-settings, .review-feed { padding: 19px; } .summary-questions form { align-items: stretch; flex-direction: column; } }
 .questions form {
   display: flex;
   align-items: flex-end;

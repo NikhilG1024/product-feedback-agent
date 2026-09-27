@@ -2,9 +2,9 @@ import { useEffect, useRef, useState } from "react";
 import type { Answer, Api, Product, SummaryVersion, SummaryView } from "./types";
 import { errorMessage, uncertainWrite } from "./api";
 import { ErrorNotice, Loading } from "./ui";
-import { SummaryEvidence } from "./SummaryEvidence";
 import { SummaryHistory } from "./SummaryHistory";
 import { SummarySettings } from "./SummarySettings";
+import { ReviewFeed } from "./ReviewFeed";
 
 const SUMMARY_POLL_MS = 5000;
 
@@ -155,8 +155,8 @@ export function SummaryDashboard({ api, product, reviewVersion = 0 }: { api: Api
         <p className="source-label">{coverageLabel(candidate)}</p>
         <p className="summary-text">{candidate.narrative}</p>
         {candidate.guidance_references.length > 0 && <p className="fine-print">Guidance used in this draft: {candidate.guidance_references.join(", ")}</p>}
-        <SummaryEvidence version={candidate} />
         <p className="fine-print">New reviews will be incorporated after the initial summary is published.</p>
+        <ReviewFeed key={product.id} api={api} product={product.id} reviewVersion={reviewVersion} />
       </article>}
       {view.current && <>
         <div className="summary-actions"><button className="button" disabled={refreshBusy || view.pending_review_count === 0} onClick={() => void refresh()}>{refreshBusy ? "Requesting…" : refreshAttempt.current ? "Retry update request" : "Update now"}</button>
@@ -172,10 +172,11 @@ export function SummaryDashboard({ api, product, reviewVersion = 0 }: { api: Api
           <p className="source-label">{coverageLabel(version)}</p>
           <p className="summary-text">{version.narrative}</p>
           {version.guidance_references.length > 0 && <p className="fine-print">Guidance used in this version: {version.guidance_references.join(", ")}</p>}
-          <SummaryEvidence version={version} />
+          {selectedVersion === null && <ReviewFeed key={product.id} api={api} product={product.id} reviewVersion={reviewVersion} />}
           <SummaryQuestions key={`${product.id}:${version.version}`} api={api} product={product.id} version={version.version} />
         </article>}
       </>}
+      {!view.current && !candidate && <ReviewFeed key={product.id} api={api} product={product.id} reviewVersion={reviewVersion} />}
       <SummarySettings api={api} product={product.id} value={view.update_threshold} onChanged={setView} />
     </>}
   </div>;
