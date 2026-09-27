@@ -79,6 +79,7 @@ export const errorMessage = (error: unknown) =>
     : "Something went wrong. Please try again.";
 export class HttpApi implements Api {
   readonly demo = false;
+  readonly localAutoAuth: boolean;
   summary(product: string) {
     return this.request<SummaryView>(`/products/${encodeURIComponent(product)}/summary`);
   }
@@ -114,7 +115,8 @@ export class HttpApi implements Api {
   constructor(
     private token: string,
     private fetcher: typeof fetch = fetch,
-  ) {}
+    localAutoAuth = false,
+  ) { this.localAutoAuth = localAutoAuth; }
   private async request<T>(
     path: string,
     method = "GET",
@@ -127,7 +129,7 @@ export class HttpApi implements Api {
       response = await fetcher("/api/v1" + path, {
         method,
         headers: {
-          Authorization: `Bearer ${this.token}`,
+          ...(!this.localAutoAuth ? { Authorization: `Bearer ${this.token}` } : {}),
           ...(body ? { "Content-Type": "application/json" } : {}),
           ...extra,
         },

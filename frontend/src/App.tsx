@@ -101,6 +101,7 @@ function Workspace({
     [view, setView] = useState<"pm" | "reviewer" | "legacy">("pm"),
     [reviewVersion, setReviewVersion] = useState(0);
   const alive = useRef(true);
+  const localAutoAuth = api instanceof HttpApi && api.localAutoAuth;
   useEffect(() => {
     alive.current = true;
     return () => {
@@ -189,11 +190,11 @@ function Workspace({
           <header className="topbar">
             <span className="top-label">Product feedback</span>
             <div className="top-actions">
-              <button className="text-button" onClick={onConnect}>
+              {!localAutoAuth && <button className="text-button" onClick={onConnect}>
                 <Plug size={14} />
                 {api.demo ? "Connect API" : "Change account"}
-              </button>
-              {!api.demo && (
+              </button>}
+              {!api.demo && !localAutoAuth && (
                 <button
                   className="icon-button"
                   aria-label="Disconnect"
@@ -317,7 +318,36 @@ function Workspace({
 export default function App() {
   const [api, setApi] = useState<Api>(() => new DemoApi()),
     [session, setSession] = useState(0),
-    [connection, setConnection] = useState(false);
+    [connection, setConnection] = useState(false),
+    [bootstrap, setBootstrap] = useState<"checking" | "ready" | "error">(import.meta.env.DEV ? "checking" : "ready"),
+    [bootstrapError, setBootstrapError] = useState(""),
+    [bootstrapAttempt, setBootstrapAttempt] = useState(0);
+  useEffect(() => {
+    if (!import.meta.env.DEV) return;
+    let cancelled = false;
+    setBootstrap("checking"); setBootstrapError("");
+    async function start() {
+      try {
+        const response = await fetch("/__local_demo_auth", { cache: "no-store" });
+        if (!response.ok) throw new Error("Local development auth is unavailable.");
+        const state = await response.json() as { enabled?: boolean; error?: string | null };
+        if (state.error) throw new Error(state.error);
+        if (state.enabled) {
+          const local = new HttpApi("", fetch, true);
+          await local.products();
+          if (!cancelled) { setApi(local); setSession((n) => n + 1); }
+        }
+        if (!cancelled) setBootstrap("ready");
+      } catch (error) {
+        if (!cancelled) {
+          setBootstrapError(error instanceof Error ? error.message : "Local API connection failed.");
+          setBootstrap("error");
+        }
+      }
+    }
+    void start();
+    return () => { cancelled = true; };
+  }, [bootstrapAttempt]);
   function connect(next: Api) {
     setApi(next);
     setSession((n) => n + 1);
@@ -325,6 +355,9 @@ export default function App() {
   }
   return (
     <>
+      {bootstrap === "checking" && <div className="content"><Loading>Connecting to local workspace…</Loading></div>}
+      {bootstrap === "error" && <div className="content"><ErrorNotice message={bootstrapError} retry={() => setBootstrapAttempt((n) => n + 1)} /></div>}
+      {bootstrap === "ready" && <>
       <Workspace
         key={session}
         api={api}
@@ -334,6 +367,7 @@ export default function App() {
       {connection && (
         <Connection onClose={() => setConnection(false)} onConnect={connect} />
       )}
+      </>}
     </>
   );
 }
