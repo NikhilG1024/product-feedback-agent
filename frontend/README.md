@@ -4,8 +4,8 @@ The default PM page shows the currently published product summary from a cached
 GET. It displays the publication date, version,
 historical sample and new-review coverage, pending count, summary status, and a
 separate Hindsight memory status. Product selection never starts a model job.
-Open **Version history** when needed to fetch older pages; questions and evidence
-stay bound to the selected immutable version. Summary evidence is retained in
+Open **Version history** when needed to fetch older pages. The question form is
+not shown on the dashboard. Summary evidence is retained in
 the data but its separate UI section is hidden. **Legacy analysis** retains the
 earlier run-based workflow.
 
@@ -81,5 +81,6 @@ with negative, neutral, then positive ratings within each source group; newest
 reviews lead within each group. Use Newest first for global time order.
 Filter by star rating and rating-based sentiment (negative 1–2, neutral 3,
 positive 4–5); filters intersect. The list polls every five seconds in live mode
-and supports Load more. It is hidden when inspecting a historical summary so
+and supports Load more. It shows five reviews initially and adds five per Load more click. It is hidden
+when inspecting a historical summary so
 current reviews cannot be mistaken for historical evidence.
