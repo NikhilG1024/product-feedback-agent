@@ -144,7 +144,7 @@ cd backend
 
 ```sh
 cd frontend
-npm run dev
+LOCAL_DEMO_AUTH=1 npm run dev
 ```
 
 Open [the app](http://127.0.0.1:5173). The Vite server proxies `/api` to the local
@@ -154,7 +154,10 @@ Stop each process with Ctrl+C. For frontend-only exploration, run just terminal 
 
 ## 5. Use the cached summary
 
-Connect with the PM token and select a product. The current published summary
+With local demo auth enabled, select a product without entering a token. Vite reads
+`DEMO_PM_TOKEN` and `DEMO_REVIEWER_TOKEN` from the root `.env` on the server and
+uses the appropriate role for each request. This mode is limited to localhost
+and is not enabled in production builds. The current published summary
 loads from MongoDB without a model call. Coverage says how many historical reviews
 were sampled and how many new reviews have been incorporated; it is not a claim
 about the full dataset. Open history on demand to inspect old versions and ask

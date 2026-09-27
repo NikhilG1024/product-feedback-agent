@@ -30,13 +30,23 @@ address. Tokens live in browser memory and clear on reload or disconnect. Never
 put OpenRouter, Groq, Hindsight, or Mongo credentials in `VITE_` variables or the
 Connect API field.
 
+For a local demo without entering tokens in the UI, run
+`LOCAL_DEMO_AUTH=1 npm run dev`. Vite reads the two demo tokens from the root
+`.env` and injects them server-side for the appropriate API routes. This mode
+accepts only loopback clients and a loopback backend; credentials are never
+bundled into browser code. The app connects automatically. Production builds
+do not enable this development-only proxy mode.
+
 ## Summary and reviewer behavior
 
-An uninitialized product has an explicit empty state until a locally generated
-initial candidate passes citation and semantic review and is published. The
+A product without a published version shows its non-rejected generated initial
+candidate with an explicit validation/publication-pending label. Published
+versions take priority. Only products without either show an empty state. The
 coverage label uses the actual number of sampled historical reviews, up to 20,
 plus incorporated new reviews; it makes no full-dataset claim. Existing current
-content remains visible during a later update or failed attempt.
+content remains visible during a later update or failed attempt. The live page
+checks the selected product every five seconds and displays new published versions
+automatically. Initialization progress is not shown on the customer feedback page.
 
 The default update threshold is one new review. PMs can set a whole number from
 1 to 100 or choose **Update now** to flush pending reviews. A retry after an
