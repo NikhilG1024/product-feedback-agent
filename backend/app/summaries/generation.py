@@ -366,6 +366,8 @@ class SummaryGenerator:
             candidate: list[dict] = []
             # Greedy packing uses the exact serialized prompt, including instructions and schema.
             while offset + len(candidate) < len(safe_reviews):
+                if len(candidate) >= getattr(self.provider, "summary_max_reviews_per_call", 20):
+                    break
                 next_candidate = candidate + [safe_reviews[offset + len(candidate)]]
                 messages = _prompt_messages(safe_product,
                     _delta_context(previous) if delta_mode else previous,

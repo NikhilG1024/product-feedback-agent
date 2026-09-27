@@ -139,6 +139,7 @@ export interface Decision {
   processing: Processing | null;
 }
 export interface Api {
+  readonly publicDemo?: boolean;
   watchProduct?(product: string, onEvent: (event: { type: "summary"; view: SummaryView } | { type: "reviews_changed"; revision: string }) => void, signal: AbortSignal): Promise<void>;
   watchSubmission?(id: string, onSubmission: (submission: Submission) => void, signal: AbortSignal): Promise<void>;
   watchAnalysis?(id: string, onRun: (run: Run) => void, signal: AbortSignal): Promise<void>;

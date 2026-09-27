@@ -366,3 +366,26 @@ def test_failed_frozen_no_input_refresh_recovers_as_noop(setup):
     assert repo.current("P").status == "ready"
     assert repo.versions.count_documents({"product_id": "P"}) == 1
     assert repo.inputs.find_one({"review_id": "_refresh:retry-covered"})["incorporated_version"] == 1
+
+
+def test_failed_model_retries_with_backoff_and_keeps_inputs(setup):
+    from datetime import timedelta
+    database, repo = setup
+    publish_empty_initial(repo)
+    reviews = ReviewService(database, summaries=repo)
+    result = reviews.submit("P", Principal(user_id="reviewer", role="reviewer"), "retry", ReviewInput(title="Broken", text="The hinge broke", rating=1))
+    now = datetime.now(timezone.utc)
+    claim = repo.claim("P", now, 180)
+    repo.freeze(claim, [], [])
+    repo.fail(claim, "model_invalid_output", now)
+    state = repo.states.find_one({"_id": "P"})
+    assert state["status"] == "queued"
+    assert state["next_attempt_at"] == (now + timedelta(seconds=30)).replace(microsecond=((now.microsecond // 1000)*1000))
+    assert repo.claim("P", now + timedelta(seconds=29), 180) is None
+    second = repo.claim("P", now + timedelta(seconds=31), 180)
+    assert second.job_id == claim.job_id
+    repo.fail(second, "model_provider_failed", now + timedelta(seconds=31))
+    state = repo.states.find_one({"_id": "P"})
+    assert (state["next_attempt_at"] - now).total_seconds() > 90
+    assert repo.summary_status("P", result["id"])["status"] == "pending"
+    assert repo.current("P").current.version == 1

@@ -50,7 +50,8 @@ def _batch_schema(output_schema: type[BaseModel], reviews: list[dict]) -> dict:
                 "required": ["review_id", "quote"]}}
         themed.append(item)
     schema["properties"]["themes"] = {"type": "array", "minItems": len(themed),
-        "maxItems": len(themed), "prefixItems": themed, "items": {}}
+        "maxItems": len(themed), "prefixItems": themed,
+        "items": themed[0] if len(themed) == 1 else {"anyOf": themed} if themed else {}}
     return schema
 
 
@@ -102,6 +103,7 @@ class LocalSummaryModel:
     """A single configured local endpoint, with no provider fallback."""
 
     incremental_delta = True
+    summary_max_reviews_per_call = 1
 
     summary_prompt_budget_bytes = (LOCAL_SUMMARY_PROMPT_BYTES -
                                    len(EVIDENCE_LIMIT_REMINDER.encode("utf-8")))

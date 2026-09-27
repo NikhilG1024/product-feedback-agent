@@ -103,7 +103,6 @@ export function SummaryDashboard({ api, product, reviewVersion = 0, active = tru
     (["pending", "approved", "accepted"].includes(view.initial_candidate.semantic_review?.status ?? ""))
     ? view.initial_candidate : null;
   return <div className="summary-dashboard">
-    <div className="heading"><h1>{product.title}</h1><p>Customer feedback and the evidence behind it.</p></div>
     {!view && loading && <Loading>Loading product summary…</Loading>}
     {error && <ErrorNotice message={error} retry={() => void retryLoad()} />}
     {view && <>
@@ -114,38 +113,37 @@ export function SummaryDashboard({ api, product, reviewVersion = 0, active = tru
         <span>{view.pending_review_count} pending new review{view.pending_review_count === 1 ? "" : "s"}</span>
         {view.current && <span>Memory sync: {view.memory_status}</span>}
       </div>
+      {view.status === "queued" && view.error_code && <p role="status">Summary update retry scheduled automatically. Your reviews are saved; the last published summary remains available.</p>}
       {view.status === "failed" && <ErrorNotice message={`Summary update failed${view.error_code ? ` (${view.error_code})` : ""}. ${view.current ? "The last published version remains available." : "No summary has been published yet."}`} />}
       {!view.current && !candidate && (view.status === "uninitialized"
         ? <section className="empty-state"><h2>No published summary yet.</h2><p>An initial summary is being prepared for this product. This page updates when it is published.</p></section>
         : <section className="empty-state"><h2>No published summary available.</h2><p>Status: {view.status}. This page updates when a summary is published.</p></section>)}
       {candidate && <article className="published-summary candidate-summary">
-        <div className="section-heading"><h2>Generated initial summary</h2><span className="pill">Awaiting publication</span></div>
-        <p className="summary-meta">Generated {new Date(candidate.created_at).toLocaleString()} · Version {candidate.version} · Not published</p>
-        <p className="source-label">{coverageLabel(candidate)}</p>
+        <div className="section-heading"><div><span className="eyebrow">AI-generated overview</span><h2>Generated initial summary</h2></div><span className="pill">Awaiting publication</span></div>
+        <div className="summary-metrics"><div><span>Review coverage</span><strong>{candidate.coverage.historical_sample_count + candidate.coverage.new_review_count}</strong><small>{coverageLabel(candidate)}</small></div><div><span>Version</span><strong>{candidate.version}</strong><small>Not published</small></div><div><span>Generated</span><strong>{new Date(candidate.created_at).toLocaleDateString()}</strong><small>Initial draft</small></div></div>
         <p className="summary-text">{candidate.narrative}</p>
         {candidate.guidance_references.length > 0 && <p className="fine-print">Guidance used in this draft: {candidate.guidance_references.join(", ")}</p>}
         <p className="fine-print">New reviews will be incorporated after the initial summary is published.</p>
         <ReviewFeed key={product.id} api={api} product={product.id} active={active} revision={reviewRevision} reviewVersion={api.demo ? reviewVersion : 0} />
       </article>}
       {view.current && <>
-        <div className="summary-actions"><button className="button" disabled={refreshBusy || view.pending_review_count === 0} onClick={() => void refresh()}>{refreshBusy ? "Requesting…" : refreshAttempt.current ? "Retry update request" : "Update now"}</button>
-          <button className="text-button" onClick={() => void retryLoad()}>Check for updates</button></div>
+        {!api.publicDemo && <div className="summary-actions"><button className="button" disabled={refreshBusy || view.pending_review_count === 0} onClick={() => void refresh()}>{refreshBusy ? "Requesting…" : refreshAttempt.current ? "Retry update request" : "Update now"}</button>
+          <button className="text-button" onClick={() => void retryLoad()}>Check for updates</button></div>}
         {refreshError && <ErrorNotice message={refreshError} retry={() => void refresh()} />}
         {historyProduct !== product.id && <button className="text-button" onClick={() => setHistoryProduct(product.id)}>View version history</button>}
         {historyProduct === product.id && <SummaryHistory api={api} product={product.id} selectedVersion={selectedVersion} onSelect={setSelectedVersion} />}
         {historyError && <ErrorNotice message={historyError} />}
         {selectedVersion !== null && !historical && !historyError && <Loading>Loading version {selectedVersion}…</Loading>}
         {version && <article className={selectedVersion === null ? "published-summary" : "published-summary historical-summary"}>
-          <div className="section-heading"><h2>{selectedVersion === null ? "Current published summary" : `Historical version ${version.version}`}</h2><span className="pill ready">Version {version.version}</span></div>
-          <p className="summary-meta">Last updated {new Date(version.published_at || version.created_at).toLocaleString()}</p>
-          <p className="source-label">{coverageLabel(version)}</p>
+          <div className="section-heading"><div><span className="eyebrow">{selectedVersion === null ? "Live product insight" : "Archived product insight"}</span><h2>{selectedVersion === null ? "Current published summary" : `Historical version ${version.version}`}</h2></div><span className="pill ready">Version {version.version}</span></div>
+          <div className="summary-metrics"><div><span>Review coverage</span><strong>{version.coverage.historical_sample_count + version.coverage.new_review_count}</strong><small>{coverageLabel(version)}</small></div><div><span>Current version</span><strong>{version.version}</strong><small>{selectedVersion === null ? "Published" : "Historical"}</small></div><div><span>Last updated</span><strong>{new Date(version.published_at || version.created_at).toLocaleDateString()}</strong><small>{new Date(version.published_at || version.created_at).toLocaleTimeString([], { hour: "numeric", minute: "2-digit" })}</small></div></div>
           <p className="summary-text">{version.narrative}</p>
           {version.guidance_references.length > 0 && <p className="fine-print">Guidance used in this version: {version.guidance_references.join(", ")}</p>}
           {selectedVersion === null && <ReviewFeed key={product.id} api={api} product={product.id} active={active} revision={reviewRevision} reviewVersion={api.demo ? reviewVersion : 0} />}
         </article>}
       </>}
       {!view.current && !candidate && <ReviewFeed key={product.id} api={api} product={product.id} active={active} revision={reviewRevision} reviewVersion={api.demo ? reviewVersion : 0} />}
-      <SummarySettings api={api} product={product.id} value={view.update_threshold} onChanged={setView} />
+      {!api.publicDemo && <SummarySettings api={api} product={product.id} value={view.update_threshold} onChanged={setView} />}
     </>}
   </div>;
 }

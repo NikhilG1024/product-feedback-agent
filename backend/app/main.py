@@ -129,6 +129,8 @@ def create_app(settings: Settings, services: object | None = None, *, lifespan=N
     app.include_router(summary_router)
     from app.api.events import router as events_router
     app.include_router(events_router)
+    from app.api.demo import router as demo_router
+    app.include_router(demo_router)
     return app
 
 

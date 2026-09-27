@@ -200,7 +200,10 @@ questions tied to their evidence. Reviewer submissions show summary inclusion
 separately from memory processing.
 
 The default update threshold is **1** new review. A PM may set an integer from
-1 to 100; reviews below that threshold remain pending. **Update now** flushes a
+1 to 100. Reviews below that threshold wait for a batch, but the worker automatically
+flushes pending reviews once the oldest has waited one hour after admission.
+This timer survives worker restarts and does not bypass active jobs or retry delays.
+The summary worker must be running; if it was offline, it catches up after startup. **Update now** flushes a
 partial batch with a retry-safe idempotency key. A guidance change may create a
 coverage-neutral version. Mongo publication survives a Hindsight outage; the
 separate memory status records sync and retry. See [backend instructions](backend/README.md)

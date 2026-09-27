@@ -17,6 +17,7 @@ import type {
   SummaryView,
   SummaryVersion,
 } from "./types";
+import { API_ORIGIN } from "./startup";
 import { watchSSE } from "./sse";
 const messages: Record<string, string> = {
   historical_batch_required: "Choose a review group for past Amazon reviews.",
@@ -82,9 +83,10 @@ export const errorMessage = (error: unknown) =>
 export class HttpApi implements Api {
   readonly demo = false;
   readonly localAutoAuth: boolean;
+  readonly publicDemo: boolean;
   private streamHeaders(): Record<string, string> { return this.localAutoAuth ? {} : { Authorization: `Bearer ${this.token}` }; }
   watchProduct(product: string, onEvent: (event: { type: "summary"; view: SummaryView } | { type: "reviews_changed"; revision: string }) => void, signal: AbortSignal) {
-    return watchSSE(`/api/v1/products/${encodeURIComponent(product)}/events`, this.streamHeaders(), ({ event, data }) => {
+    return watchSSE(`${API_ORIGIN}/api/v1/products/${encodeURIComponent(product)}/events`, this.streamHeaders(), ({ event, data }) => {
       const value: unknown = JSON.parse(data);
       if (event === "summary" && value && typeof value === "object" && (value as SummaryView).product_id === product)
         onEvent({ type: "summary", view: value as SummaryView });
@@ -93,14 +95,14 @@ export class HttpApi implements Api {
     }, signal, this.fetcher);
   }
   watchSubmission(id: string, onSubmission: (submission: Submission) => void, signal: AbortSignal) {
-    return watchSSE(`/api/v1/reviews/${encodeURIComponent(id)}/events`, this.streamHeaders(), ({ event, data }) => {
+    return watchSSE(`${API_ORIGIN}/api/v1/reviews/${encodeURIComponent(id)}/events`, this.streamHeaders(), ({ event, data }) => {
       if (event !== "submission") return;
       const value: unknown = JSON.parse(data);
       if (value && typeof value === "object" && (value as Submission).id === id) onSubmission(value as Submission);
     }, signal, this.fetcher);
   }
   watchAnalysis(id: string, onRun: (run: Run) => void, signal: AbortSignal) {
-    return watchSSE(`/api/v1/analysis-runs/${encodeURIComponent(id)}/events`, this.streamHeaders(), ({ event, data }) => {
+    return watchSSE(`${API_ORIGIN}/api/v1/analysis-runs/${encodeURIComponent(id)}/events`, this.streamHeaders(), ({ event, data }) => {
       if (event !== "analysis") return;
       const value: unknown = JSON.parse(data);
       if (value && typeof value === "object" && (value as Run).id === id) onRun(value as Run);
@@ -142,7 +144,8 @@ export class HttpApi implements Api {
     private token: string,
     private fetcher: typeof fetch = fetch,
     localAutoAuth = false,
-  ) { this.localAutoAuth = localAutoAuth; }
+    publicDemo = false,
+  ) { this.localAutoAuth = localAutoAuth; this.publicDemo = publicDemo; }
   private async request<T>(
     path: string,
     method = "GET",
@@ -152,7 +155,7 @@ export class HttpApi implements Api {
     let response: Response;
     try {
       const fetcher = this.fetcher;
-      response = await fetcher("/api/v1" + path, {
+      response = await fetcher(API_ORIGIN + "/api/v1" + path, {
         method,
         headers: {
           ...(!this.localAutoAuth ? { Authorization: `Bearer ${this.token}` } : {}),

@@ -2,7 +2,7 @@
 export type LocalAuthState = { enabled: boolean; error: string | null; pm: string; reviewer: string };
 
 export function safeLocalTarget(target: string): boolean {
-  return target === "http://127.0.0.1:8000" || target === "http://localhost:8000";
+  return target === "https://product-feedback-agent-api.vercel.app" || target === "http://127.0.0.1:8000" || target === "http://localhost:8000";
 }
 
 export function isLoopback(address?: string): boolean {
@@ -12,7 +12,7 @@ export function isLoopback(address?: string): boolean {
 export function localAuthState(command: string, target: string, env: Record<string, string | undefined>): LocalAuthState {
   const disabled = { enabled: false, error: null, pm: "", reviewer: "" };
   if (command !== "serve" || env.LOCAL_DEMO_AUTH !== "1") return disabled;
-  if (!safeLocalTarget(target)) return { ...disabled, error: "Local demo auth requires the loopback API on port 8000." };
+  if (!safeLocalTarget(target)) return { ...disabled, error: "Local demo auth requires the local API or the approved Vercel backend." };
   if (!env.DEMO_PM_TOKEN?.trim() || !env.DEMO_REVIEWER_TOKEN?.trim())
     return { ...disabled, error: "Local demo tokens are missing from the server environment." };
   return { enabled: true, error: null, pm: env.DEMO_PM_TOKEN, reviewer: env.DEMO_REVIEWER_TOKEN };

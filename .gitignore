@@ -40,3 +40,7 @@ data/processed/
 work/
 *.egg-info/
 .vercel/
+
+# Firebase local deployment cache
+.firebase/
+firebase-debug.log*

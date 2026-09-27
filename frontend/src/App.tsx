@@ -1,7 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import {
   ArrowRight,
-  Boxes,
   ChevronDown,
   LayoutGrid,
   MessageSquare,
@@ -11,9 +10,11 @@ import {
 } from "lucide-react";
 import type { Api, Product } from "./types";
 import { HttpApi, errorMessage } from "./api";
+import { waitForBackend, openDemoSession } from "./startup";
 import { DemoApi } from "./demo";
 import { Dashboard } from "./Dashboard";
 import { SummaryDashboard } from "./SummaryDashboard";
+import { ProductImage } from "./ProductImage";
 import { Reviewer } from "./Reviewer";
 import { ErrorNotice, Loading, Modal } from "./ui";
 function Connection({
@@ -31,6 +32,7 @@ function Connection({
     setError("");
     const next = new HttpApi(token.trim());
     try {
+      await waitForBackend(new AbortController().signal);
       await next.products();
       onConnect(next);
     } catch (e) {
@@ -98,8 +100,16 @@ function Workspace({
     [error, setError] = useState(""),
     [picker, setPicker] = useState(false),
     [query, setQuery] = useState(""),
+    [category, setCategory] = useState("all"),
     [view, setView] = useState<"pm" | "reviewer" | "legacy">("pm"),
     [reviewVersion, setReviewVersion] = useState(0);
+  const [connectionNotice, setConnectionNotice] = useState(true);
+  useEffect(() => {
+    setConnectionNotice(true);
+    if (api.demo) return;
+    const timer = setTimeout(() => setConnectionNotice(false), 4000);
+    return () => clearTimeout(timer);
+  }, [api]);
   const alive = useRef(true);
   const localAutoAuth = api instanceof HttpApi && api.localAutoAuth;
   useEffect(() => {
@@ -134,17 +144,17 @@ function Workspace({
     void load();
   }, [api]);
   const filtered = products.filter((p) =>
-    `${p.title} ${p.product_type || ""} ${p.id}`
+    (category === "all" || p.product_type === category) && `${p.title} ${p.product_type || ""} ${p.id}`
       .toLowerCase()
       .includes(query.toLowerCase()),
   );
   return (
     <>
-      <div className={"environment-banner " + (!api.demo ? "live" : "")}>
+      {(api.demo || connectionNotice) && <div role="status" className={"environment-banner " + (!api.demo ? "live" : "")}>
         {api.demo
           ? "SAMPLE MODE · Illustrative products and results. Nothing is sent to a server."
           : "CONNECTED · Live workspace data. Actions are authorized by the server."}
-      </div>
+      </div>}
       <div className="app-shell">
         <aside className="sidebar">
           <a
@@ -160,7 +170,7 @@ function Workspace({
               <i />
               <i />
             </span>
-            signal.
+            <span className="brand-wordmark"><strong>PFIA</strong><small>Product Feedback<br />Intelligence Agent</small></span>
           </a>
           <nav aria-label="Workspace">
             <button
@@ -177,9 +187,9 @@ function Workspace({
               <MessageSquare size={17} />
               Write a review
             </button>
-            <button className={view === "legacy" ? "active" : ""} onClick={() => setView("legacy")}>
+            {!api.publicDemo && <button className={view === "legacy" ? "active" : ""} onClick={() => setView("legacy")}>
               <LayoutGrid size={17} /> Legacy analysis
-            </button>
+            </button>}
           </nav>
           <div className="sidebar-bottom">
             <span className="connection-dot" />
@@ -188,13 +198,13 @@ function Workspace({
         </aside>
         <main>
           <header className="topbar">
-            <span className="top-label">Product feedback</span>
+            <div className="workspace-heading"><span className="top-label">Product Feedback Intelligence Agent</span><strong>{view === "pm" ? "Customer intelligence" : view === "reviewer" ? "Share your experience" : "Review analysis"}</strong></div>
             <div className="top-actions">
-              {!localAutoAuth && <button className="text-button" onClick={onConnect}>
+              {!localAutoAuth && !api.publicDemo && <button className="text-button" onClick={onConnect}>
                 <Plug size={14} />
                 {api.demo ? "Connect API" : "Change account"}
               </button>}
-              {!api.demo && !localAutoAuth && (
+              {!api.demo && !localAutoAuth && !api.publicDemo && (
                 <button
                   className="icon-button"
                   aria-label="Disconnect"
@@ -213,22 +223,13 @@ function Workspace({
             </div>
           </header>
           <div className="content">
-            <div className="product-selection">
-              <button
-                className="product-button"
-                onClick={() => setPicker(true)}
-                disabled={!products.length}
-              >
-                <span className="product-icon">
-                  <Boxes size={20} />
-                </span>
-                <span>
-                  <small>Selected product</small>
-                  <b>{selected?.title || "Choose a product"}</b>
-                </span>
-                <ChevronDown size={15} />
-              </button>
-            </div>
+            <section className="product-selection" aria-label="Selected product">
+              <div className="selection-heading"><div><span className="eyebrow">Your product catalog</span><h2>Explore customer feedback</h2></div><button className="button primary" onClick={() => setPicker(true)} disabled={!products.length}>Browse products <ChevronDown size={15}/></button></div>
+              <div className="product-button selected-product-details">
+                {selected && <ProductImage product={selected}/>}
+                <span className="selected-product-copy"><small>{selected?.product_type || "Selected product"}</small><h1>{selected?.title || "Choose a product"}</h1><span>Product ID {selected?.id || "—"}</span></span>
+              </div>
+            </section>
             {error && <ErrorNotice message={error} retry={() => load()} />}{" "}
             {!selected ? (
               loading ? (
@@ -276,6 +277,7 @@ function Workspace({
               placeholder="Search loaded products or categories"
             />
           </label>
+          <div className="catalog-categories" aria-label="Product categories"><button className={category === "all" ? "active" : ""} onClick={() => setCategory("all")}>All products</button>{[...new Set(products.map(p=>p.product_type).filter((c): c is string => !!c))].sort().map(c=><button key={c} className={category === c ? "active" : ""} onClick={()=>setCategory(c)}>{c}</button>)}</div>
           <p className="fine-print">
             {products.length} products loaded
             {cursor ? " · Load more to expand your search." : "."}
@@ -293,6 +295,7 @@ function Workspace({
                   setPicker(false);
                 }}
               >
+                <ProductImage product={p}/>
                 <span className="category">{p.product_type || "Product"}</span>
                 <strong>{p.title}</strong>
                 <small>{p.id}</small>
@@ -321,25 +324,31 @@ export default function App() {
   const [api, setApi] = useState<Api>(() => new DemoApi()),
     [session, setSession] = useState(0),
     [connection, setConnection] = useState(false),
-    [bootstrap, setBootstrap] = useState<"checking" | "ready" | "error">(import.meta.env.DEV ? "checking" : "ready"),
+    [bootstrap, setBootstrap] = useState<"checking" | "ready" | "error">("checking"),
     [bootstrapError, setBootstrapError] = useState(""),
     [bootstrapAttempt, setBootstrapAttempt] = useState(0);
   useEffect(() => {
-    if (!import.meta.env.DEV) return;
     let cancelled = false;
+    const controller = new AbortController();
     setBootstrap("checking"); setBootstrapError("");
     async function start() {
       try {
+        if (!import.meta.env.DEV) {
+          await waitForBackend(controller.signal);
+          const token = await openDemoSession(controller.signal);
+          if (!cancelled) { setApi(new HttpApi(token, fetch, false, true)); setSession((n) => n + 1); setBootstrap("ready"); }
+        } else {
         const response = await fetch("/__local_demo_auth", { cache: "no-store" });
         if (!response.ok) throw new Error("Local development auth is unavailable.");
         const state = await response.json() as { enabled?: boolean; error?: string | null };
         if (state.error) throw new Error(state.error);
         if (state.enabled) {
           const local = new HttpApi("", fetch, true);
-          await local.products();
+          await waitForBackend(controller.signal);
           if (!cancelled) { setApi(local); setSession((n) => n + 1); }
         }
         if (!cancelled) setBootstrap("ready");
+        }
       } catch (error) {
         if (!cancelled) {
           setBootstrapError(error instanceof Error ? error.message : "Local API connection failed.");
@@ -348,7 +357,7 @@ export default function App() {
       }
     }
     void start();
-    return () => { cancelled = true; };
+    return () => { cancelled = true; controller.abort(); };
   }, [bootstrapAttempt]);
   function connect(next: Api) {
     setApi(next);
@@ -357,7 +366,7 @@ export default function App() {
   }
   return (
     <>
-      {bootstrap === "checking" && <div className="content"><Loading>Connecting to local workspace…</Loading></div>}
+      {bootstrap === "checking" && <main className="startup-screen"><div className="startup-card"><span className="startup-brand">PFIA</span><h1>Product Feedback Intelligence Agent</h1><p>Bringing your product insights into focus.</p><Loading>Connecting to your workspace…</Loading></div></main>}
       {bootstrap === "error" && <div className="content"><ErrorNotice message={bootstrapError} retry={() => setBootstrapAttempt((n) => n + 1)} /></div>}
       {bootstrap === "ready" && <>
       <Workspace

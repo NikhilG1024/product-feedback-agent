@@ -58,6 +58,7 @@ class Settings:
     max_question_context_chars: int = 2000
     summary_initialization_progress_path: str = ""
     summary_initialization_stale_seconds: int = 120
+    public_demo_enabled: bool = False
 
     def __repr__(self) -> str:
         return "Settings(<redacted>)"
@@ -83,6 +84,8 @@ class Settings:
             raise ValueError('Invalid capacity limit')
         if type(self.capacity_checks_enabled) is not bool:
             raise ValueError('Invalid capacity flag')
+        if type(self.public_demo_enabled) is not bool:
+            raise ValueError('Invalid public demo flag')
         if not self.capacity_checks_enabled:
             parsed_mongo = urlsplit(self.mongo_uri)
             if parsed_mongo.hostname not in {'localhost', '127.0.0.1', '::1'} or not self.mongo_database.startswith('test_'):
@@ -116,9 +119,12 @@ class Settings:
                     raise ValueError('Invalid numeric configuration') from None
         capacity_flag = os.getenv('CAPACITY_CHECKS_ENABLED', 'true').lower()
         if capacity_flag not in {'true', 'false'}: raise ValueError('Invalid capacity flag')
+        public_demo_flag = os.getenv('PUBLIC_DEMO_ENABLED', 'false').lower()
+        if public_demo_flag not in {'true', 'false'}: raise ValueError('Invalid public demo flag')
         return cls(
             **limits,
             capacity_checks_enabled=capacity_flag == 'true',
+            public_demo_enabled=public_demo_flag == 'true',
             mongo_uri=os.getenv("MONGODB_URI", ""),
             mongo_database=os.getenv("MONGODB_DATABASE", ""),
             reviewer_token=os.getenv("DEMO_REVIEWER_TOKEN", ""),

@@ -285,7 +285,7 @@ def main():
                 fail("ngrok is not installed or not on PATH")
             command = [executable, "http", str(PORT), "--log", "stderr", "--log-level", "warn"]
             if domain:
-                command.extend(["--domain", domain])
+                command.extend(["--url", "https://" + domain])
             child = launch(command, RUNTIME / "ngrok-model.log")
             children.append(child)
             public = wait_until(lambda: active_tunnel(domain), child, 45, "ngrok tunnel")

@@ -9,7 +9,7 @@ export default defineConfig(({ command, mode }) => {
   // loadEnv runs only in Vite's Node process. These unprefixed values are never
   // exposed via import.meta.env or serialized into a browser build.
   const env = loadEnv(mode, path.resolve(path.dirname(fileURLToPath(import.meta.url)), ".."), "");
-  const target = process.env.API_PROXY_TARGET || env.API_PROXY_TARGET || "http://127.0.0.1:8000";
+  const target = process.env.API_PROXY_TARGET || env.API_PROXY_TARGET || "https://product-feedback-agent-api.vercel.app";
   const auth = localAuthState(command, target, { ...env, ...process.env });
   return {
     plugins: [react(), {
@@ -17,7 +17,7 @@ export default defineConfig(({ command, mode }) => {
       configureServer(server) {
         server.middlewares.use((req, res, next) => {
           const address = req.socket.remoteAddress;
-          if ((req.url?.startsWith("/api/") || req.url?.startsWith("/__local_demo_auth")) && !isLoopback(address)) {
+          if ((req.url?.startsWith("/api/") || req.url?.startsWith("/health/") || req.url?.startsWith("/__local_demo_auth")) && !isLoopback(address)) {
             res.statusCode = 403; res.end(); return;
           }
           if (req.url?.split("?")[0] === "/__local_demo_auth") {
@@ -35,6 +35,7 @@ export default defineConfig(({ command, mode }) => {
       port: 5173,
       strictPort: true,
       proxy: {
+        "/health": { target, changeOrigin: true },
         "/api": {
           target,
           changeOrigin: true,

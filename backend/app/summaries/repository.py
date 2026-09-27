@@ -209,6 +209,12 @@ class SummaryRepository:
     def _pending_count(self, product_id, *, boundary=None):
         return self.inputs.count_documents(self._pending_query(product_id, boundary=boundary))
 
+    def _has_overdue_reviews(self, product_id, now):
+        # Durable admission time survives restarts; imported/processed inputs
+        # cannot trigger a flush. Existing leases and retry delays still apply.
+        return self.inputs.find_one({**self._pending_query(product_id),
+            "admitted_at": {"$lte": now - timedelta(hours=1)}}, {"_id": 1}) is not None
+
     def _refresh_query(self, product_id, boundary=None):
         query = {"product_id": product_id, "source": {"$in": ["refresh_pending_reviews", "refresh_guidance"]},
                  "incorporated_version": None}
@@ -298,11 +304,18 @@ class SummaryRepository:
     def fail(self, claim, code, now) -> None:
         if not isinstance(code, str) or not code:
             raise ValueError("error code required")
+        state = self._owned(claim)
+        if state is None:
+            return
+        attempts = state["job"].get("retry_attempts", 0) + 1
+        delay = min(300, 30 * 2 ** min(attempts - 1, 4))
+        retryable = code in {"model_invalid_output", "model_output_truncated",
+                            "model_provider_failed", "model_rate_limited"}
         self.states.update_one({"_id": claim.product_id, "job.owner_token": claim.owner_token,
                                 "current_version": claim.parent_version},
-            {"$set": {"status": "failed", "error_code": code,
-                      "next_attempt_at": now + timedelta(seconds=30),
-                      "job.lease_expires_at": now}})
+            {"$set": {"status": "queued" if retryable else "failed", "error_code": code,
+                      "next_attempt_at": now + timedelta(seconds=delay),
+                      "job.retry_attempts": attempts, "job.lease_expires_at": now}})
 
     def summary_status(self, product_id, review_id) -> dict:
         self.reconcile(product_id)
@@ -372,7 +385,8 @@ class SummaryRepository:
             if boundary is not None and self._eligible_count(product_id, boundary=boundary) == 0:
                 boundary = None
             if (boundary is None and self._pending_count(product_id) < state.get("update_threshold", 1)
-                    and self._refresh_count(product_id) == 0):
+                    and self._refresh_count(product_id) == 0
+                    and not self._has_overdue_reviews(product_id, now)):
                 return None
         if job is None:
             boundary = boundary if boundary is not None else state.get("admission_sequence", 0)
@@ -783,7 +797,8 @@ class SummaryRepository:
         if state.get("job") is None and status != "failed":
             if version is None:
                 status = "uninitialized"
-            elif pending >= state.get("update_threshold", 1) or self._refresh_count(product_id):
+            elif (pending >= state.get("update_threshold", 1) or self._refresh_count(product_id)
+                  or self._has_overdue_reviews(product_id, datetime.now(timezone.utc))):
                 status = "queued"
             else:
                 status = "waiting" if pending else "ready"

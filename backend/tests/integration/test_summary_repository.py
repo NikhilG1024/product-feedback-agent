@@ -478,3 +478,36 @@ def test_initial_bulk_admission_is_verified_bounded_and_idempotent(repo):
     repo.database.reviews.insert_one(held)
     with pytest.raises(ValueError, match="eligible"):
         repo.admit_initial_reviews("P", [held])
+
+
+def test_hour_old_pending_review_bypasses_threshold_and_survives_restart(repo):
+    repo.database.reviews.insert_one(review(1))
+    publish_initial(repo)
+    repo.set_threshold("P", 10)
+    repo.admit_review(review(1))
+    repo.inputs.update_one({"product_id": "P", "review_id": "r001"},
+                          {"$set": {"admitted_at": NOW}})
+    assert repo.claim("P", NOW + timedelta(minutes=59, seconds=59), 30) is None
+    restarted = SummaryRepository(repo.database)
+    claim = restarted.next_claim(NOW + timedelta(hours=1), 30)
+    assert claim is not None
+    assert [row["_id"] for row in restarted.pending_rows(claim)] == ["r001"]
+    # Hourly eligibility must not steal active leases or skip retry backoff.
+    assert restarted.claim("P", NOW + timedelta(hours=1, seconds=1), 30) is None
+    restarted.fail(claim, "model_provider_failed", NOW + timedelta(hours=1))
+    assert restarted.claim("P", NOW + timedelta(hours=1, seconds=29), 30) is None
+    assert restarted.claim("P", NOW + timedelta(hours=1, seconds=31), 30) is not None
+
+
+def test_old_incorporated_or_imported_reviews_do_not_trigger_hourly_flush(repo):
+    publish_initial(repo)
+    repo.set_threshold("P", 10)
+    repo.admit_review(review(1))
+    repo.inputs.update_one({"review_id": "r001"},
+        {"$set": {"admitted_at": NOW, "incorporated_version": 1}})
+    # Use a reachable historical review so reconciliation preserves its membership.
+    repo.versions.update_one({"product_id": "P", "version": 1},
+                            {"$set": {"delta_review_ids": ["r001"]}})
+    repo.admit_review({**review(2), "source": "amazon_2023"})
+    repo.inputs.update_one({"review_id": "r002"}, {"$set": {"admitted_at": NOW}})
+    assert repo.next_claim(NOW + timedelta(hours=2), 30) is None

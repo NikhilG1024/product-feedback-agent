@@ -30,7 +30,7 @@ def test_pinned_schema_request_and_auth_header():
     assert payload['response_format']['schema']['properties']['narrative']['maxLength']==900
     themes=payload['response_format']['schema']['properties']['themes']
     assert themes['minItems']==themes['maxItems']==1
-    assert themes['prefixItems'][0]['properties']['evidence']['items']['properties']['review_id']['const']=='r1'
+    assert themes['items']['properties']['evidence']['items']['properties']['review_id']['const']=='r1'
     assert 'Battery lasts all day.' in themes['prefixItems'][0]['properties']['evidence']['items']['properties']['quote']['enum']
     assert payload['temperature']==0 and payload['max_tokens']==6144
     assert model.summary_prompt_budget_bytes>30000
