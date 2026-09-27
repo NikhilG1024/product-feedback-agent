@@ -1,14 +1,16 @@
 # Product Feedback Agent
 
-An evidence-backed product-feedback dashboard for product managers. Analyze Amazon
-reviews or new user submissions, inspect exact supporting quotes, save PM guidance,
-and compare baseline analysis with analysis informed by Hindsight memory.
+An evidence-backed product-feedback dashboard for product managers. The default
+product page reads a cached, versioned summary with exact supporting quotes.
+New submitted reviews update that summary when the product's threshold is met;
+PMs can also request an update, browse immutable history, and inspect guidance.
+The earlier run-based analysis remains available under **Legacy analysis**.
 
 The project contains a React/TypeScript frontend, a FastAPI backend, a separate
-background worker, MongoDB storage, Hindsight memory, and a Groq model adapter.
-MongoDB stores reviews, frozen analysis inputs, results and job progress; Hindsight
-provides recalled context. A saved review and a completed AI analysis are separate
-states.
+background workers, MongoDB storage, Hindsight memory, and separate model adapters.
+Incremental summaries use the exact OpenRouter Nemotron 3 Ultra free variant;
+legacy analysis uses Groq. A saved review, published summary, and Hindsight sync
+are separate states.
 
 ## Prerequisites
 
@@ -17,9 +19,11 @@ states.
 - MongoDB connection with collection/index management permissions and visibility
   into all user-database statistics. The application enforces a 400,000,000-byte
   ceiling for `dataSize + indexSize` across user databases.
-- A server-side Groq API key. The configured adapter uses
-  `https://api.groq.com/openai/v1` and `openai/gpt-oss-20b` without a provider fallback.
-- Hindsight API URL and key for memory mode. Baseline mode does not require memory.
+- A server-side `OPENROUTER_API_KEY` for incremental summaries. The runtime pins
+  `nvidia/nemotron-3-ultra-550b-a55b:free` with a zero-price provider ceiling.
+- A server-side Groq key for optional legacy analysis.
+- Hindsight API URL and key for independent summary-version memory sync and
+  legacy memory mode.
 
 ## 1. Clone and install
 
@@ -52,6 +56,7 @@ Edit `.env` locally and fill these settings:
 | `MONGODB_URI` | Your MongoDB connection URI |
 | `MONGODB_DATABASE` | Target database name, e.g. `product_feedback` |
 | `GROQ_API_KEY` | Model credential, used only by the backend |
+| `OPENROUTER_API_KEY` | Server-only incremental summary credential for Nemotron 3 Ultra free |
 | `HINDSIGHT_API_URL` | Your Hindsight service endpoint |
 | `HINDSIGHT_API_KEY` | Hindsight service credential |
 | `DEMO_PM_TOKEN` | Demo PM access token for analysis, questions and decisions |
@@ -93,7 +98,24 @@ unknown incompatible schemas and does not rewrite imported reviews. The team's
 application database already received v2; see the dated
 [migration verification report](docs/migration-v2-report.json).
 
-## 4. Start three processes
+After backing up and reviewing the [summary cutover report](docs/summary-cutover-report.md),
+run the separate v3 dry run and migration before enabling summary writes:
+
+```sh
+cd backend
+.venv/bin/python -m dotenv -f ../.env run -- .venv/bin/python -m app.migrations.v3 --dry-run
+.venv/bin/python -m dotenv -f ../.env run -- .venv/bin/python -m app.migrations.v3
+cd ..
+```
+
+V3 adds summary state, immutable versions, and an input membership ledger. It does
+not reimport or rewrite raw reviews. An uninitialized product returns an explicit
+empty summary until a locally generated draft passes citation and semantic review
+and is published. The local initial artifact path uses up to 20 eligible historical
+reviews per product and excludes held-out Batch C; retain its sample manifest and
+review record outside Git.
+
+## 4. Start four processes
 
 Run each block in a separate terminal, starting at the repository root.
 
@@ -111,7 +133,14 @@ cd backend
 .venv/bin/python -m dotenv -f ../.env run -- .venv/bin/python -m app.run_worker
 ```
 
-**Terminal 3 — frontend**
+**Terminal 3 — dedicated summary worker**
+
+```sh
+cd backend
+.venv/bin/python -m dotenv -f ../.env run -- .venv/bin/python -m app.run_summary_worker
+```
+
+**Terminal 4 — frontend**
 
 ```sh
 cd frontend
@@ -120,10 +149,26 @@ npm run dev
 
 Open [the app](http://127.0.0.1:5173). The Vite server proxies `/api` to the local
 backend at port 8000. API documentation is at [Swagger UI](http://127.0.0.1:8000/docs).
-Stop each process with Ctrl+C. For frontend-only exploration, run just terminal 3;
+Stop each process with Ctrl+C. For frontend-only exploration, run just terminal 4;
 **Sample mode** uses illustrative fixtures and does not call AI services.
 
-## 5. Run a short demo
+## 5. Use the cached summary
+
+Connect with the PM token and select a product. The current published summary
+loads from MongoDB without a model call. Coverage says how many historical reviews
+were sampled and how many new reviews have been incorporated; it is not a claim
+about the full dataset. Open history on demand to inspect old versions and ask
+questions tied to their evidence. Reviewer submissions show summary inclusion
+separately from memory processing.
+
+The default update threshold is **1** new review. A PM may set an integer from
+1 to 100; reviews below that threshold remain pending. **Update now** flushes a
+partial batch with a retry-safe idempotency key. A guidance change may create a
+coverage-neutral version. Mongo publication survives a Hindsight outage; the
+separate memory status records sync and retry. See [backend instructions](backend/README.md)
+for the API and recovery details.
+
+## 6. Run a legacy analysis demo
 
 1. Choose **Connect API** and enter `DEMO_PM_TOKEN` from your local configuration.
 2. Select a product and open **Find common issues**.

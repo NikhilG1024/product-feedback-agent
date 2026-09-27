@@ -1,11 +1,14 @@
 # Product feedback backend
 
-FastAPI API and durable MongoDB worker for reviews, scoped analysis, PM corrections,
-and grounded questions. Product route IDs are `parent_asin` values (`products._id`).
-The implementation is local and uncommitted; it has not been deployed.
+FastAPI API and durable MongoDB workers for cached product summaries, reviews,
+scoped legacy analysis, PM corrections, and grounded questions. Product route IDs
+are `parent_asin` values (`products._id`).
 
-The runtime uses Groq Free with `openai/gpt-oss-20b` and no alternate provider or
-model fallback. One authorized synthetic extraction succeeded on 2026-09-27,
+Incremental summary generation uses only OpenRouter's
+`nvidia/nemotron-3-ultra-550b-a55b:free` with a zero-price provider ceiling,
+configured by `OPENROUTER_API_KEY`. Legacy analysis uses Groq Free with
+`openai/gpt-oss-20b`; neither path falls back to another model. One authorized
+synthetic legacy extraction succeeded on 2026-09-27,
 returning one locally validated finding and citation. This proves connectivity
 and the JSON contract, not general semantic quality or remaining account quota.
 Keep the Groq account on **Free**; never enable a paid plan or automatic billing.
@@ -30,12 +33,15 @@ Set server environment values from the root `.env.example`; the app does not loa
 `.env` automatically. Keep the existing root secrets file private and unchanged.
 Required: `MONGODB_URI`, `MONGODB_DATABASE`, distinct `DEMO_REVIEWER_TOKEN` and
 `DEMO_PM_TOKEN`. Memory additionally needs `HINDSIGHT_API_URL` and
-`HINDSIGHT_API_KEY`. Model calls require server-only `GROQ_API_KEY` (or explicit,
+`HINDSIGHT_API_KEY`. Incremental summaries require server-only `OPENROUTER_API_KEY`.
+Legacy analysis calls require server-only `GROQ_API_KEY` (or explicit,
 higher-priority `LLM_API_KEY`, which must also be a Groq credential).
 `OPENCODE_API_KEY` and `DEEPSEEK_API_KEY` are ignored. A missing key leaves the API
 available with model operations disabled. Endpoint/model overrides are rejected
 unless exactly `https://api.groq.com/openai/v1` and `openai/gpt-oss-20b`.
-No transport retry or fallback can select another model or provider.
+No transport retry or fallback can select another model or provider. An absent
+OpenRouter key leaves cached summary reads available but records attempted updates
+as failed for later retry.
 
 Apply the additive v2 migration explicitly before serving writes. It checks known
 validators/indexes and refuses incompatible data; it does not drop collections or
@@ -47,6 +53,8 @@ these operator commands with its exported environment:
 ```sh
 .venv/bin/python -m app.migrations.v2 --dry-run
 .venv/bin/python -m app.migrations.v2
+.venv/bin/python -m app.migrations.v3 --dry-run
+.venv/bin/python -m app.migrations.v3
 .venv/bin/uvicorn app.main:configured_app --factory --host 127.0.0.1 --port 8000
 ```
 
@@ -55,6 +63,44 @@ Start the separate worker in a second terminal with the same environment:
 ```sh
 .venv/bin/python -m app.run_worker
 ```
+
+Start the dedicated incremental summary worker in a third terminal with the same
+server-only environment:
+
+```sh
+.venv/bin/python -m app.run_summary_worker
+```
+
+V3 is a separate explicit migration. It adds state, immutable versions, and input
+membership without rewriting v2 raw reviews or legacy reports. The summary worker
+only updates a product after a locally prepared initial candidate has passed
+source/citation checks, semantic review, and publication. See the
+[cutover report](../docs/summary-cutover-report.md) before running this against the
+application database.
+
+## Cached summary contract
+
+`GET /api/v1/products/{product_id}/summary` returns an explicit `uninitialized`
+view before publication. GET summary, history, and individual versions never
+enqueue generation or call a model. PM-only routes include paginated
+`/summary/history`, `/summary/versions/{version}`, `PATCH /summary/settings`,
+`POST /summary/refresh` (required `Idempotency-Key`), and
+`POST /summary/questions` bound to an immutable published version. Reviewer
+submission/status responses expose a separate summary status and version.
+
+The default threshold is one new review; PMs may choose an integer 1–100.
+`pending_reviews` refresh flushes a partial batch. Guidance refreshes can publish
+a new version without increasing review coverage. Pending reviews are in a unique
+membership ledger; a durable marker on the saved review supports crash recovery.
+Publication advances a fenced current pointer, leaving older versions immutable.
+The worker resumes frozen review/guidance IDs and generation checkpoints on retry.
+
+Every published version has an independent Hindsight retain outbox with a stable
+`summary:<product>:v<version>` identity. Mongo publication remains visible if
+Hindsight is unavailable; `memory_status` reports pending, synced, or failed and
+the outbox retries with its saved operation checkpoint. Guidance passed to summary
+generation comes from stored PM decisions; the UI does not claim Hindsight recall
+was used when it was not. Keep pilot artifacts and sample manifests outside Git.
 
 SIGINT/SIGTERM stop claims; lifespan cleanup closes model, memory and Mongo clients.
 The worker rotates queues so a busy analysis queue cannot starve reviews/decisions.

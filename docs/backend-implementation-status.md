@@ -1,38 +1,48 @@
-# Backend implementation status — 2026-09-27
+# Backend implementation status — 2026-09-28
 
-Implemented in the requested repository and independently reviewed. Changes are local and uncommitted; the repository has no HEAD and remote Git history has not been reconciled. The application MongoDB v2 migration was applied and verified on 2026-09-27 after user approval. No cloud test data, deployment, or push was performed.
+The backend now has two separate AI paths. The default product dashboard reads
+cached, immutable MongoDB summaries. New review increments use the exact
+OpenRouter `nvidia/nemotron-3-ultra-550b-a55b:free` model with a zero-price
+provider ceiling. The earlier run-based analysis retains its Groq adapter and
+worker. Neither path silently switches models.
 
-## Delivered
+## Delivered and verified locally
 
-- FastAPI reviewer/PM demo authentication, product browsing and owned review submission/status/listing.
-- Mongo additive validator/index migration, idempotency, durable queues, lease fencing and retries.
-- Confirmed Hindsight retention with reconciliation checkpoints and product/time/source isolation.
-- Frozen analysis inputs, validated evidence, distinct review counts, product summaries and guidance references.
-- PM corrections/decisions, provisional incremental classification and grounded questions.
-- Storage guard using dataSize plus indexes under the 400,000,000-byte ceiling; provider/error sanitization.
-- Groq Free-plan-compatible runtime using openai/gpt-oss-20b, strict endpoint/model selection and no alternate-provider fallback. Durable extraction chunks resume across retries and are paced 60seconds apart.
+- V3 summary state, version, and input-ledger collections with an explicit
+  additive migration and 400,000,000-byte user-database capacity guard.
+- Locally prepared initial artifacts from up to 20 eligible historical reviews
+  per product, held-out Batch C excluded. Source and citation checks precede a
+  separate attributed semantic review; staged or rejected drafts remain hidden.
+- PM-only cached summary, paginated history, version, settings, refresh, and
+  version-bound question routes. GET routes do not call generation.
+- Durable saved-review admission, default threshold 1 (PM range 1–100), frozen
+  worker inputs, lease fencing, generation checkpoints, immutable publication,
+  and retry-safe manual flush. Legacy review processing stays independent.
+- Separate per-version Hindsight retention outbox with a stable version ID and
+  durable operation checkpoint. Mongo publication survives a memory outage.
 
-## Verification
+The synthetic disposable-Mongo cutover acceptance test covers initial approval,
+cached GET, one-review increment, immutable history, threshold 3 buffering and
+flush, coverage-neutral guidance refresh, and Hindsight failure/retry. It makes
+no claim about live-provider quality or the application database.
 
-Final full backend suite: 171 passed, 1 skipped (opt-in live model smoke). Importer regression: 23 passed. Independent final auth/model check: 43 passed. Compile check passed. A separately authorized live Groq request produced one finding and one locally validated exact citation from synthetic review text. Earlier real Hindsight retention/document readback succeeded; semantic recall remained inconclusive. Deterministic end-to-end acceptance uses real local MongoDB and provider doubles; it is not a full live two-provider acceptance or a model-quality benchmark.
+## Application cutover status
 
-All per-task reviews and the whole-backend review completed. Final review fixes enforce historical batch cutoffs, store compact immutable guidance references, return explicit 409 responses for unsupported legacy results, and surface safe failure codes.
+The application database received v2 earlier and v3 was applied after a dry run
+on 2026-09-28. The API has been restarted and returned HTTP 200 with an explicit
+`uninitialized` summary for a real product. Local initial draft import and
+quality review are in progress; publication counts and memory sync completion
+must be confirmed in the [cutover report](summary-cutover-report.md). The
+dedicated summary worker should start only after approved initial versions are
+published and the final review fixes are validated. No real product is described
+as initialized here while its current pointer is empty.
 
-## Application database migration
+## Runtime and remaining checks
 
-Applied v2 to `product_feedback` after a successful dry run. All expected validators and indexes were verified, including review idempotency, cursor pagination, job queues and rate-limit expiry. Complete BSON SHA-256 fingerprints before and after confirmed that all existing documents were unchanged: 300 products, 300,000 reviews and 3 batches. User-database data plus indexes total 291,705,582 bytes, below the 400,000,000-byte ceiling. See [migration verification report](migration-v2-report.json).
-
-## Run/setup status
-
-Follow [backend setup](../backend/README.md) and [provider contract](provider-contract.md). Existing .env is ignored/private and was not changed by implementation. GROQ_API_KEY presence was verified without printing it. The application does not automatically load .env: export/load the server environment for API and worker. The v2 migration is applied. Configure distinct demo tokens, then start API and separate worker. Keep Groq on its Free plan; local code cannot inspect or enforce the external account billing tier. Free quotas can delay large runs. Existing imported application data is preserved.
-
-The frontend task built frontend/ separately and has its own verification/run guide. API success contracts were shared during implementation.
-
-## Decisions and tradeoffs
-
-1. Worked in the user-selected repository and retained uncommitted changes because there was no valid local commit base. Cost: Git history must be reconciled before a safe push.
-2. Used filesystem snapshots for reviews in place of commit diffs. Cost: less convenient history; retained this plan's ignored ledger/review artifacts until Git reconciliation.
-3. Used uncompressed dataSize plus indexSize for quota accounting, consistent with the verified Atlas importer. Actual Atlas/account telemetry remains authoritative; concurrent external writes can defeat preflight reservation.
-4. Tried the officially documented anonymous OpenCode endpoint to satisfy the zero-cost requirement. Both direct and genuine local-CLI free access were denied; the later explicit Groq selection superseded that default. Requests fail closed instead of switching providers; external availability and billing-plan configuration remain outside local enforcement.
-
-Review edits/deletes, public identity management, automatic remote-memory/orphan cleanup and deployment remain outside the approved scope. Accepted review text can exceed the deliberately small free-model request budget; such inputs fail explicitly rather than being silently truncated.
+Follow [backend setup](../backend/README.md) to load the same private environment
+for the API, legacy worker, and dedicated summary worker. `OPENROUTER_API_KEY` is
+server-only; `HINDSIGHT_API_URL` and `HINDSIGHT_API_KEY` control independent memory
+sync. Do not run automated tests against the application database. The live
+cutover still needs approved draft publication, worker startup, cached read and
+history checks, memory-sync observation, and final product counts. Raw reviews,
+legacy reports, and unpublished pilot artifacts are retained.
