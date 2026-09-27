@@ -66,6 +66,38 @@ class DeepSeekModel:
     def close(self):
         self.http.close()
 
+    def generate_summary(self, messages: list[dict[str, str]], output_schema: type[BaseModel]) -> dict:
+        """Groq JSON-mode summary request; caller supplies the full schema-bearing prompt."""
+        from app.summaries.generation import MAX_PROMPT_BYTES, serialized_prompt_bytes
+        if (not isinstance(messages, list) or len(messages) != 2
+                or [item.get('role') for item in messages] != ['system', 'user']
+                or any(not isinstance(item.get('content'), str) for item in messages)):
+            raise ProviderError('model_invalid_input')
+        try:
+            size = serialized_prompt_bytes(messages)
+        except (TypeError, ValueError):
+            raise ProviderError('model_invalid_input') from None
+        if size > MAX_PROMPT_BYTES:
+            raise ProviderError('model_input_too_large')
+        try:
+            response = self.http.request('POST', '/chat/completions', payload={
+                'model': self.model, 'stream': False, 'max_tokens': 1536,
+                'response_format': {'type': 'json_object'}, 'messages': messages})
+        except ProviderHTTPError as exc:
+            raise ProviderError('model_rate_limited' if exc.status == 429 else 'model_provider_failed') from None
+        except ProviderError:
+            raise ProviderError('model_provider_failed') from None
+        try:
+            choice = response['choices'][0]
+            if choice['finish_reason'] != 'stop':
+                raise ValueError('Incomplete generation')
+            output = choice['message']['content']
+            if not isinstance(output, str) or len(output.encode('utf-8')) > 100000:
+                raise ValueError('Invalid content')
+            return output_schema.model_validate_json(output).model_dump()
+        except (KeyError, IndexError, TypeError, ValueError, ValidationError):
+            raise ProviderError('model_invalid_output') from None
+
     def _generate(self, instruction: str, data: dict, schema: type[StrictModel]):
         try:
             content = json.dumps(data, ensure_ascii=False, allow_nan=False, default=str)
