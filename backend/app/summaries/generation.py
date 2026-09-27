@@ -17,6 +17,7 @@ from app.summaries.contracts import GeneratedSummary, SummaryVersion
 
 PROMPT_VERSION = "summary-1"
 MAX_PROMPT_BYTES = 6000
+MAX_CONFIGURED_PROMPT_BYTES = 65536
 MAX_BATCH_REVIEWS = 20
 
 
@@ -116,7 +117,7 @@ class SummaryGenerator:
                  old_evidence_lookup: Callable[[str, list[str]], Mapping[str, Mapping[str, Any]]],
                  *, max_prompt_bytes: int = MAX_PROMPT_BYTES,
                  save_checkpoint: Callable[[dict], None] | None = None):
-        if type(max_prompt_bytes) is not int or max_prompt_bytes < 1 or max_prompt_bytes > MAX_PROMPT_BYTES:
+        if type(max_prompt_bytes) is not int or max_prompt_bytes < 1 or max_prompt_bytes > MAX_CONFIGURED_PROMPT_BYTES:
             raise ValueError("Invalid summary prompt budget")
         self.provider = provider
         self.old_evidence_lookup = old_evidence_lookup

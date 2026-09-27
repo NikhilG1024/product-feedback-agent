@@ -1,5 +1,35 @@
 # Provider contracts
 
+## Incremental summary provider: OpenRouter Nemotron 3 Ultra Free
+
+Incremental product summaries use the exact model
+`nvidia/nemotron-3-ultra-550b-a55b:free` through
+`https://openrouter.ai/api/v1/chat/completions`, authenticated by the server-only
+`OPENROUTER_API_KEY`. The adapter rejects any other model or endpoint. Its request
+also sets `provider.max_price` to zero for prompt and completion tokens, with no
+alternate model, paid route, or Groq fallback. Legacy analysis still uses the
+Groq configuration described below.
+
+The [official model page](https://openrouter.ai/nvidia/nemotron-3-ultra-550b-a55b:free)
+lists this variant as free and states that it does not support `response_format`.
+The prompt requests JSON; the adapter validates the complete response against the
+local `GeneratedSummary` schema and rejects malformed, incomplete, or oversized
+output. The app separately validates exact evidence and keeps coverage and
+publication metadata outside model output. Requests use a 64 KiB serialized
+UTF-8 body cap and a 64,000-byte prompt cap. Oversized input fails explicitly;
+review text is never silently shortened. The adapter disables reasoning in the
+request to keep routine updates within a bounded latency budget.
+
+[OpenRouter's limits documentation](https://openrouter.ai/docs/api_reference/limits)
+describes free-model request caps and 429 responses; account-specific remaining
+quota is available through `GET /api/v1/key`. A 429 is surfaced as a sanitized
+retryable `model_rate_limited` failure. Missing credentials fail before networking.
+The free model page also states the free endpoint logs inputs and outputs under
+NVIDIA's trial terms, so submit only data appropriate for that service.
+
+This integration has deterministic mock-transport coverage. No live model call
+or production database write is part of the automated test suite.
+
 Verified 2026-09-27. Runtime adapters are synchronous. They never fabricate analysis
 when a provider fails. `httpx==0.28.1` is the bounded HTTP client;
 `hindsight-client==0.10.1` supplies the official response schemas.
