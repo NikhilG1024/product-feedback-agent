@@ -1,0 +1,4 @@
+# Versions exercised on Python 3.14.7; use requirements.txt for compatible ranges.
+dnspython==2.8.0
+pymongo==4.18.2
+python-dotenv==1.2.3

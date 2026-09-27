@@ -1,0 +1,56 @@
+{
+  "verified_at": "2026-09-27T15:43:44.358211+00:00",
+  "database": "product_feedback",
+  "migration_version": 2,
+  "status": "applied_and_verified",
+  "existing_documents_unchanged": true,
+  "verification": "SHA-256 of complete BSON documents ordered by _id, before and after",
+  "collections": {
+    "analysis_runs": 0,
+    "batches": 3,
+    "decisions": 0,
+    "findings": 0,
+    "products": 300,
+    "rate_limits": 0,
+    "reviews": 300000
+  },
+  "user_database_usage_bytes": 291705582,
+  "capacity_limit_bytes": 400000000,
+  "indexes": {
+    "analysis_runs": [
+      "_id_",
+      "product_analysis_history",
+      "processing_queue"
+    ],
+    "batches": [
+      "_id_"
+    ],
+    "decisions": [
+      "_id_",
+      "product_decision_history",
+      "processing_queue"
+    ],
+    "findings": [
+      "_id_",
+      "run_product_issue"
+    ],
+    "products": [
+      "_id_"
+    ],
+    "rate_limits": [
+      "_id_",
+      "rate_expiry"
+    ],
+    "reviews": [
+      "_id_",
+      "product_time",
+      "product_batch_time",
+      "submission_author_key",
+      "product_time_cursor",
+      "processing_queue"
+    ],
+    "schema_migrations": [
+      "_id_"
+    ]
+  }
+}

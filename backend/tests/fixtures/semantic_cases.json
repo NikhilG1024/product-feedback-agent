@@ -1,0 +1,8 @@
+{
+  "purpose": "Hand-labeled synthetic counterexamples, not model benchmark results",
+  "cases": [
+    {"id":"supported", "text":"The hinge broke.", "claim":"The reviewer reports a broken hinge.", "quote":"The hinge broke.", "label":{"supported":true,"reason":"Claim matches the full sentence."}},
+    {"id":"negation-omitted", "text":"I cannot say the hinge broke; it only feels stiff.", "claim":"The reviewer reports a broken hinge.", "quote":"the hinge broke", "label":{"supported":false,"reason":"Verbatim substring omits the surrounding negation."}},
+    {"id":"cause-invented", "text":"The hinge broke.", "claim":"A manufacturing defect caused the hinge to break.", "quote":"The hinge broke.", "label":{"supported":false,"reason":"Review reports a failure without establishing its cause."}}
+  ]
+}
