@@ -92,5 +92,5 @@ def read_progress(path: str, stale_seconds: int, *, now: datetime | None = None)
             progress["elapsed_seconds"] = elapsed
         age = (current - updated).total_seconds()
         return {"availability": "stale" if age > stale_seconds else "available", "progress": progress}
-    except (OSError, ValueError, TypeError, KeyError, UnicodeError):
+    except (OSError, ValueError, TypeError, KeyError, UnicodeError, RecursionError):
         return unavailable

@@ -67,3 +67,14 @@ def test_progress_requires_pm_and_rejects_client_path(tmp_path, settings):
                           headers={"Authorization": "Bearer reviewer-secret-value"})
     assert response.status_code == 403
     assert get(client, "?path=/secret").status_code == 422
+
+
+def test_deeply_nested_json_is_unavailable_instead_of_server_error(tmp_path, settings):
+    path = tmp_path / "progress.json"
+    # Python 3.14's JSON decoder tolerates far more than 1,000 levels.
+    path.write_text("[" * 200_000 + "0" + "]" * 200_000)
+    client = TestClient(create_app(replace(settings, summary_initialization_progress_path=str(path))),
+                        raise_server_exceptions=False)
+    response = get(client)
+    assert response.status_code == 200
+    assert response.json() == {"availability": "unavailable", "progress": None}
