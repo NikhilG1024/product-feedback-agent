@@ -63,14 +63,28 @@ def publish_initial(repo, review_ids=()):
 
 def test_unique_admission_and_threshold_count_unique_pending(repo):
     publish_initial(repo)
+    assert repo.current("P").status == "ready"
     repo.database.product_summary_state.update_one({"_id": "P"}, {"$set": {"update_threshold": 2}})
     repo.admit_review(review(1))
     repo.admit_review(review(1))
     assert repo.current("P").pending_review_count == 1
+    assert repo.current("P").status == "waiting"
     assert repo.claim("P", NOW + timedelta(seconds=1), 30) is None
     repo.admit_review(review(2))
     assert repo.current("P").pending_review_count == 2
+    assert repo.current("P").status == "queued"
     assert repo.claim("P", NOW + timedelta(seconds=1), 30) is not None
+
+
+def test_default_threshold_queues_first_review_and_preserves_failure(repo):
+    publish_initial(repo)
+    repo.admit_review(review(1))
+    assert repo.current("P").status == "queued"
+    claim = repo.claim("P", NOW + timedelta(seconds=1), 30)
+    assert claim is not None
+    assert repo.current("P").status == "updating"
+    repo.fail(claim, "synthetic_failure", NOW + timedelta(seconds=1))
+    assert repo.current("P").status == "failed"
 
 
 def test_freeze_orders_timestamp_ties_by_id_and_later_arrivals_wait(repo):

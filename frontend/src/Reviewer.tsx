@@ -66,7 +66,7 @@ export function Reviewer({
         if (!cancelled) setStatusError(errorMessage(e));
       }
     }
-    timer = setTimeout(poll, 4000);
+    timer = setTimeout(poll, 1000);
     return () => {
       cancelled = true;
       clearTimeout(timer);
@@ -143,9 +143,9 @@ export function Reviewer({
             </div>
             <div className="status-row">
               <span>Product summary</span>
-              <span className="pill">{result.summary?.status === "included" && result.summary.version
+              <span className={`pill ${result.summary?.status === "failed" ? "failed" : result.summary?.status === "included" ? "ready" : ""}`}>{result.summary?.status === "included" && result.summary.version
                 ? `Included in version ${result.summary.version}`
-                : result.summary?.status === "waiting" ? "Awaiting update threshold"
+                : result.summary?.status === "waiting" ? "Summary update pending"
                 : result.summary?.status === "queued" ? "Update queued"
                 : result.summary?.status === "updating" ? "Updating"
                 : result.summary?.status === "failed" ? "Update failed; review saved"

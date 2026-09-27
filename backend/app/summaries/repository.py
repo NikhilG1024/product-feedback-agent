@@ -738,10 +738,13 @@ class SummaryRepository:
         version = _public_version(document) if document else None
         pending = self._pending_count(product_id)
         status = state.get("status") or ("uninitialized" if version is None else "ready")
-        if state.get("job") is None and status == "updating":
-            status = "uninitialized" if version is None else "ready"
-        elif version is not None and status == "ready" and pending < state.get("update_threshold", 1):
-            status = "waiting" if pending else "ready"
+        if state.get("job") is None and status != "failed":
+            if version is None:
+                status = "uninitialized"
+            elif pending >= state.get("update_threshold", 1) or self._refresh_count(product_id):
+                status = "queued"
+            else:
+                status = "waiting" if pending else "ready"
         return SummaryView(product_id=product_id, current=version,
                            last_updated_at=version.published_at if version else None,
                            update_threshold=state.get("update_threshold", 1),

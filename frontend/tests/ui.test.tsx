@@ -39,10 +39,27 @@ it("continues checking summary inclusion after memory processing finishes", asyn
   await user.type(screen.getByLabelText("Review title"), "Battery");
   await user.type(screen.getByLabelText("Your experience"), "Long life.");
   await user.click(screen.getByRole("button", { name: "Submit review" }));
-  expect(await screen.findByText("Awaiting update threshold")).toBeInTheDocument();
+  expect(await screen.findByText("Summary update pending")).toBeInTheDocument();
   expect(await screen.findByText("Included in version 2", {}, { timeout: 6000 })).toBeInTheDocument();
   expect(status).toHaveBeenCalled();
 }, 8000);
+
+it.each([
+  ["queued", "Update queued"],
+  ["updating", "Updating"],
+  ["failed", "Update failed; review saved"],
+] as const)("shows the server's %s summary state after saving", async (state, label) => {
+  const api = new DemoApi();
+  vi.spyOn(api, "submit").mockResolvedValue({ id: `review-${state}`, processing: null,
+    summary: { status: state, version: null } });
+  const user = userEvent.setup();
+  render(<Reviewer api={api} product={product} onSaved={() => {}} />);
+  await user.click(screen.getByRole("radio", { name: "4 stars" }));
+  await user.type(screen.getByLabelText("Review title"), "Battery");
+  await user.type(screen.getByLabelText("Your experience"), "Battery life changed.");
+  await user.click(screen.getByRole("button", { name: "Submit review" }));
+  expect(await screen.findByText(label)).toBeInTheDocument();
+});
 it("does not render report content until completed", () => {
   const run: Run = {
     id: "r",
