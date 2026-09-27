@@ -4,6 +4,7 @@ import importlib.util
 from datetime import datetime, timezone
 from pathlib import Path
 
+from bson.int64 import Int64
 from pymongo import MongoClient
 
 from app.repositories.capacity import CapacityGuard
@@ -59,7 +60,7 @@ def migrate(database, dry_run: bool) -> dict:
             continue
         if name in existing:
             size = database.command("collStats", name)["size"]
-            if type(size) is not int or size < 0:
+            if type(size) not in (int, Int64) or size < 0:
                 raise ValueError("Invalid collection size: " + name)
             estimated_bytes += max(65_536, size * 2) * len(specs)
         else:

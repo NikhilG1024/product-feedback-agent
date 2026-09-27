@@ -129,3 +129,23 @@ def test_populated_index_build_refuses_insufficient_headroom_before_mutation(dat
         v3.migrate(database, False)
     assert database.list_collection_names() == ["product_summary_state"]
     assert set(database.product_summary_state.index_information()) == {"_id_"}
+
+
+def test_populated_index_preflight_accepts_bson_int64_size(database, monkeypatch):
+    from bson.int64 import Int64
+    from app.migrations import v3
+    database.create_collection("product_summary_state",
+        validator=v3.contract.V3_SCHEMAS["product_summary_state"],
+        validationLevel="strict", validationAction="error")
+    database.product_summary_state.insert_one({"_id": "P", "product_id": "P"})
+    original_command = database.command
+
+    def command(name, *args, **kwargs):
+        result = original_command(name, *args, **kwargs)
+        if name == "collStats":
+            return {**result, "size": Int64(result["size"])}
+        return result
+
+    monkeypatch.setattr(database, "command", command)
+    assert v3.migrate(database, False)["version"] == 3
+    assert database.product_summary_state.index_information()["one_state_per_product"]["unique"] is True
