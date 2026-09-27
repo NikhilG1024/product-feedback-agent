@@ -99,15 +99,19 @@ class SummaryRepository:
         if self.database.schema_migrations.find_one({"_id": "v3"}, {"_id": 1}) is None:
             raise ServiceError("summary_schema_unavailable", 503)
 
+    @staticmethod
+    def _fresh_state(product_id):
+        return {"_id": product_id, "product_id": product_id, "current_version": None,
+                "next_version": 1, "update_threshold": 1, "status": "uninitialized",
+                "fence": 0, "admission_sequence": 0, "job": None,
+                "drain_boundary": None, "memory_status": "unknown"}
+
     def _state(self, product_id):
         self._require_migrated()
         state = self.states.find_one({"_id": product_id})
         if state is not None:
             return state
-        fresh = {"_id": product_id, "product_id": product_id, "current_version": None,
-                 "next_version": 1, "update_threshold": 1, "status": "uninitialized",
-                 "fence": 0, "admission_sequence": 0, "job": None,
-                 "drain_boundary": None, "memory_status": "unknown"}
+        fresh = self._fresh_state(product_id)
         self.capacity.check_documents([fresh])
         try:
             self.states.insert_one(fresh)
@@ -138,6 +142,62 @@ class SummaryRepository:
             # Another acknowledgement inserted this same review first. Gaps in
             # admission sequence are harmless; membership is the source of truth.
             pass
+
+    def admit_initial_reviews(self, product_id, reviews) -> int:
+        """Admit one verified, bounded initialization sample with one quota preflight."""
+        selected = list(reviews)
+        if len(selected) > 20:
+            raise ValueError("initial sample must contain at most 20 reviews")
+        if not selected:
+            return 0
+        ids = [row.get("_id") for row in selected]
+        if any(not isinstance(value, str) or not value for value in ids) or len(set(ids)) != len(ids):
+            raise ValueError("initial sample IDs must be unique strings")
+        self._require_migrated()
+        stored = {row["_id"]: row for row in self.database.reviews.find(
+            {"_id": {"$in": ids}, "parent_asin": product_id})}
+        for supplied in selected:
+            row = stored.get(supplied["_id"])
+            if (row is None or supplied.get("parent_asin") != product_id or
+                    row.get("source", "amazon_2023") != "amazon_2023" or
+                    row.get("held_out") is not False or row.get("batch") == "C" or
+                    any(supplied.get(field) != row.get(field) for field in
+                        ("timestamp", "title", "text", "rating"))):
+                raise ValueError("initial sample contains an ineligible or changed review")
+        existing = {row["review_id"]: row for row in self.inputs.find(
+            {"product_id": product_id, "review_id": {"$in": ids}})}
+        if any(row["source"] != "initial" for row in existing.values()):
+            raise ValueError("initial sample conflicts with existing membership")
+        fresh = [row for row in selected if row["_id"] not in existing]
+        if not fresh:
+            return 0
+        now = datetime.now(timezone.utc)
+        state = self.states.find_one({"_id": product_id})
+        estimates = [{"_id": uuid4().hex, "product_id": product_id, "review_id": row["_id"],
+                      "source": "initial", "admitted_at": now,
+                      "source_timestamp": row["timestamp"], "admission_sequence": 0,
+                      "incorporated_version": None} for row in fresh]
+        self.capacity.check_documents(([self._fresh_state(product_id)] if state is None else []) + estimates)
+        if state is None:
+            try:
+                self.states.insert_one(self._fresh_state(product_id))
+            except DuplicateKeyError:
+                pass
+        updated = self.states.find_one_and_update({"_id": product_id},
+            {"$inc": {"admission_sequence": len(estimates)}}, return_document=ReturnDocument.AFTER)
+        start = updated["admission_sequence"] - len(estimates) + 1
+        inserted = 0
+        for index, document in enumerate(estimates):
+            document["admission_sequence"] = start + index
+            try:
+                self.inputs.insert_one(document)
+                inserted += 1
+            except DuplicateKeyError:
+                winner = self.inputs.find_one({"product_id": product_id,
+                                               "review_id": document["review_id"]})
+                if winner is None or winner["source"] != "initial":
+                    raise ValueError("initial sample conflicts with existing membership") from None
+        return inserted
 
     def _pending_query(self, product_id, *, boundary=None, source="user_submission"):
         query = {"product_id": product_id, "source": source, "incorporated_version": None}
@@ -276,6 +336,9 @@ class SummaryRepository:
     def claim(self, product_id, now, lease_seconds) -> SummaryClaim | None:
         if lease_seconds <= 0:
             raise ValueError("lease_seconds must be positive")
+        # A pointer can be durable while its ledger reconciliation was interrupted.
+        # Repair before either the active-lease or threshold eligibility decision.
+        self.reconcile(product_id)
         state = self._state(product_id)
         job = state.get("job")
         if job and job["lease_expires_at"] > now:
@@ -284,7 +347,13 @@ class SummaryRepository:
             return None
         if job and job["parent_version"] != state.get("current_version"):
             # A pointer moved after the old worker's claim. Its candidate is orphaned.
-            job = None
+            self.reconcile(product_id)
+            state = self.states.find_one({"_id": product_id})
+            job = state.get("job")
+            if job and job["lease_expires_at"] > now:
+                return None
+            if job and job["parent_version"] != state.get("current_version"):
+                job = None
         boundary = state.get("drain_boundary")
         if job is None and state.get("current_version") is not None:
             if boundary is not None and self._eligible_count(product_id, boundary=boundary) == 0:
@@ -331,8 +400,29 @@ class SummaryRepository:
         result = self.states.update_one(
             {"_id": claim.product_id, "job.owner_token": claim.owner_token,
              "job.lease_expires_at": {"$gt": now}, "current_version": claim.parent_version},
-            {"$set": {"job.lease_expires_at": new_expiry}})
+            {"$set": {"job.lease_expires_at": new_expiry}, "$inc": {"fence": 1}})
         return result.matched_count == 1
+
+    def _validate_coverage(self, candidate: SummaryVersion):
+        if len(set(candidate.delta_review_ids)) != len(candidate.delta_review_ids):
+            raise ValueError("coverage contains duplicate review IDs")
+        if candidate.parent_version is None:
+            if (candidate.kind != "initial" or
+                    candidate.coverage.historical_sample_count != len(candidate.delta_review_ids) or
+                    candidate.coverage.new_review_count != 0):
+                raise ValueError("initial coverage does not match sample")
+            return
+        parent = self.versions.find_one({"product_id": candidate.product_id,
+                                         "version": candidate.parent_version})
+        if parent is None:
+            raise ValueError("coverage parent is missing")
+        expected_historical = parent["coverage"]["historical_sample_count"]
+        expected_new = parent["coverage"]["new_review_count"] + len(candidate.delta_review_ids)
+        if (candidate.kind not in {"reviews", "guidance"} or
+                (candidate.kind == "guidance" and candidate.delta_review_ids) or
+                candidate.coverage.historical_sample_count != expected_historical or
+                candidate.coverage.new_review_count != expected_new):
+            raise ValueError("cumulative coverage does not match parent and frozen inputs")
 
     def freeze(self, claim, review_ids, guidance_ids) -> FrozenUpdate:
         state = self._owned(claim)
@@ -387,6 +477,7 @@ class SummaryRepository:
             raise ValueError("claim must be frozen before staging")
         job = state["job"]
         candidate = version if isinstance(version, SummaryVersion) else SummaryVersion.model_validate(version)
+        self._validate_coverage(candidate)
         if (candidate.product_id != claim.product_id or candidate.job_id != claim.job_id or
                 candidate.parent_version != claim.parent_version or candidate.version != job["version"] or
                 candidate.delta_review_ids != job["review_ids"] or
@@ -443,6 +534,12 @@ class SummaryRepository:
                 version.parent_version is not None or version.published_at is not None or
                 version.semantic_review.status != "pending" or len(version.delta_review_ids) > 20):
             raise ValueError("invalid initial draft")
+        self._validate_coverage(version)
+        if version.delta_review_ids:
+            admitted = self.inputs.count_documents({"product_id": product_id, "source": "initial",
+                "review_id": {"$in": version.delta_review_ids}})
+            if admitted != len(version.delta_review_ids):
+                raise ValueError("initial sample has unadmitted review IDs")
         if not isinstance(raw_artifact_bytes, bytes) or not isinstance(model_manifest, dict):
             raise ValueError("raw artifact bytes and model manifest required")
         generated = GeneratedSummary.model_validate_json(raw_artifact_bytes)
@@ -531,7 +628,13 @@ class SummaryRepository:
         job = state["job"]
         candidate = self.versions.find_one({"_id": version_id, "product_id": claim.product_id,
                                             "job_id": claim.job_id, "version": job["version"]})
-        if candidate is None or candidate["parent_version"] != claim.parent_version:
+        if (candidate is None or candidate["parent_version"] != claim.parent_version or
+                candidate["delta_review_ids"] != job["review_ids"] or
+                candidate["guidance_references"] != job["guidance_ids"]):
+            return False
+        try:
+            self._validate_coverage(_public_version(candidate))
+        except ValueError:
             return False
         if candidate["kind"] == "initial":
             review = candidate.get("semantic_review", {})

@@ -30,13 +30,13 @@ def review(number, *, product="P", stamp=NOW):
             "timestamp": stamp, "text": f"Review {number}"}
 
 
-def candidate(claim, frozen, *, kind=None):
+def candidate(claim, frozen, *, kind=None, cumulative=None):
     version = SummaryVersion(product_id=claim.product_id, version=frozen.version,
         parent_version=claim.parent_version, job_id=claim.job_id,
         kind=kind or ("initial" if claim.parent_version is None else "reviews"),
         narrative="Useful account of feedback", themes=[],
         coverage=SummaryCoverage(historical_sample_count=0,
-            new_review_count=len(frozen.review_ids)),
+            new_review_count=len(frozen.review_ids) if cumulative is None else cumulative),
         delta_review_ids=frozen.review_ids, manifest_ref=None,
         model_identity="local/pinned", prompt_version="v1",
         guidance_references=frozen.guidance_ids, created_at=NOW)
@@ -119,6 +119,19 @@ def test_pointer_publication_reconciles_ledger_without_double_count(repo):
     assert repo.current("P").pending_review_count == 0
 
 
+def test_worker_claim_reconciles_pointer_crash_before_eligibility(repo):
+    publish_initial(repo)
+    repo.admit_review(review(1))
+    first = repo.claim("P", NOW + timedelta(seconds=1), 30)
+    frozen = repo.freeze(first, [], [])
+    repo.stage(first, candidate(first, frozen))
+    repo.database.product_summary_state.update_one({"_id": "P"},
+        {"$set": {"current_version": frozen.version}})
+    assert repo.database.product_summary_inputs.find_one({"review_id": "r001"})["incorporated_version"] is None
+    assert repo.next_claim(NOW + timedelta(seconds=2), 30) is None
+    assert repo.database.product_summary_inputs.find_one({"review_id": "r001"})["incorporated_version"] == 2
+
+
 def test_initial_requires_matching_approved_semantic_review(repo):
     claim = repo.claim("P", NOW, 30)
     frozen = repo.freeze(claim, [], [])
@@ -158,10 +171,10 @@ def test_threshold_100_drains_five_bounded_jobs_without_new_arrivals(repo):
         assert claim is not None
         frozen = repo.freeze(claim, [], [])
         assert len(frozen.review_ids) == 20
-        version_id = repo.stage(claim, candidate(claim, frozen))
+        version_id = repo.stage(claim, candidate(claim, frozen, cumulative=(batch + 1) * 20))
         assert repo.publish(claim, version_id, claim.lease_expires_at - timedelta(seconds=1))
     assert repo.current("P").pending_review_count == 0
-    assert repo.current("P").current.coverage.new_review_count == 20
+    assert repo.current("P").current.coverage.new_review_count == 100
 
 
 def test_refresh_replay_and_checkpoint_survive_lease_retry(repo):
@@ -241,7 +254,7 @@ def test_draining_eligible_boundary_leaves_new_arrival_for_later_threshold(repo)
     follow_on = repo.next_claim(NOW + timedelta(seconds=2), 30)
     remaining = repo.freeze(follow_on, [], [])
     assert remaining.review_ids == ["r020"]
-    assert repo.publish(follow_on, repo.stage(follow_on, candidate(follow_on, remaining)),
+    assert repo.publish(follow_on, repo.stage(follow_on, candidate(follow_on, remaining, cumulative=21)),
                         NOW + timedelta(seconds=2))
     assert repo.current("P").pending_review_count == 1
     assert repo.next_claim(NOW + timedelta(seconds=3), 30) is None
@@ -297,3 +310,97 @@ def test_memory_sync_checkpoint_survives_expired_owner_and_fences_completion(rep
     assert repo.get_memory_sync_checkpoint(retry) == {"retain_id": "summary:P:v1", "phase": "sent"}
     assert not repo.complete_memory_sync(first, NOW + timedelta(seconds=7))
     assert repo.complete_memory_sync(retry, NOW + timedelta(seconds=8))
+
+
+def test_staging_rejects_wrong_cumulative_coverage(repo):
+    publish_initial(repo)
+    repo.admit_review(review(1))
+    claim = repo.claim("P", NOW + timedelta(seconds=1), 30)
+    frozen = repo.freeze(claim, [], [])
+    wrong = candidate(claim, frozen, cumulative=7)
+    with pytest.raises(ValueError, match="coverage"):
+        repo.stage(claim, wrong)
+
+
+def test_publication_rejects_corrupted_staged_coverage(repo):
+    publish_initial(repo)
+    repo.admit_review(review(1))
+    claim = repo.claim("P", NOW + timedelta(seconds=1), 30)
+    frozen = repo.freeze(claim, [], [])
+    version_id = repo.stage(claim, candidate(claim, frozen))
+    repo.database.product_summary_versions.update_one({"_id": version_id},
+        {"$set": {"coverage.new_review_count": 9}})
+    assert not repo.publish(claim, version_id, NOW + timedelta(seconds=1))
+    assert repo.current("P").current.version == 1
+
+
+def test_initial_draft_rejects_sample_coverage_mismatch(repo):
+    generated = GeneratedSummary(narrative="Pilot", themes=[])
+    draft = SummaryVersion(product_id="P", version=1, parent_version=None,
+        job_id="pilot-mismatch", kind="initial", narrative="Pilot", themes=[],
+        coverage=SummaryCoverage(historical_sample_count=7, new_review_count=0),
+        delta_review_ids=[], model_identity="local", prompt_version="v1",
+        guidance_references=[], created_at=NOW)
+    with pytest.raises(ValueError, match="coverage"):
+        repo.stage_initial_draft("P", draft, generated.model_dump_json().encode(), {})
+
+
+def test_initial_draft_requires_admitted_sample_membership(repo):
+    generated = GeneratedSummary(narrative="Pilot", themes=[])
+    draft = SummaryVersion(product_id="P", version=1, parent_version=None,
+        job_id="pilot-unadmitted", kind="initial", narrative="Pilot", themes=[],
+        coverage=SummaryCoverage(historical_sample_count=1, new_review_count=0),
+        delta_review_ids=["unknown"], model_identity="local", prompt_version="v1",
+        guidance_references=[], created_at=NOW)
+    with pytest.raises(ValueError, match="sample"):
+        repo.stage_initial_draft("P", draft, generated.model_dump_json().encode(), {})
+
+
+def test_renewal_between_expiry_read_and_claim_cas_keeps_owner(repo, monkeypatch):
+    publish_initial(repo)
+    repo.admit_review(review(1))
+    first = repo.claim("P", NOW, 5)
+    collection = repo.states
+
+    class InterleavingCollection:
+        def __getattr__(self, name):
+            return getattr(collection, name)
+
+        def find_one_and_update(self, query, update, **kwargs):
+            if "fence" in query:
+                assert repo.renew(first, NOW + timedelta(seconds=4))
+            return collection.find_one_and_update(query, update, **kwargs)
+
+    monkeypatch.setattr(type(repo), "states", property(lambda self: InterleavingCollection()))
+    assert repo.claim("P", NOW + timedelta(seconds=6), 5) is None
+    assert repo.database.product_summary_state.find_one({"_id": "P"})["job"]["owner_token"] == first.owner_token
+
+
+def test_initial_bulk_admission_is_verified_bounded_and_idempotent(repo):
+    rows = []
+    for index in range(2):
+        row = {"_id": f"initial-{index}", "parent_asin": "P", "asin": "P",
+               "title": "Historical", "text": f"Source {index}", "rating": 4.0,
+               "timestamp": NOW, "timestamp_ms": int(NOW.timestamp() * 1000),
+               "batch": "A", "batch_id": "dataset:A", "held_out": False,
+               "dataset_id": "dataset", "provenance": {"kind": "import"}}
+        repo.database.reviews.insert_one(row)
+        rows.append(row)
+    original_capacity = repo.capacity
+
+    class CountingCapacity:
+        calls = 0
+
+        def check_documents(self, documents):
+            self.calls += 1
+            original_capacity.check_documents(documents)
+
+    repo.capacity = CountingCapacity()
+    assert repo.admit_initial_reviews("P", rows) == 2
+    assert repo.capacity.calls == 1
+    assert repo.admit_initial_reviews("P", rows) == 0
+    assert repo.database.product_summary_inputs.count_documents({"product_id": "P", "source": "initial"}) == 2
+    held = {**rows[0], "_id": "held", "batch": "C", "batch_id": "dataset:C", "held_out": True}
+    repo.database.reviews.insert_one(held)
+    with pytest.raises(ValueError, match="eligible"):
+        repo.admit_initial_reviews("P", [held])
