@@ -1207,11 +1207,13 @@ fieldset:disabled {
   color: var(--muted);
 }
 .summary-dashboard .heading { margin-bottom: 24px; }
+.summary-dashboard .heading h1 { font-size: clamp(24px, 3vw, 32px); line-height: 1.18; overflow-wrap: anywhere; }
 .summary-statusbar, .summary-actions, .version-list { display: flex; align-items: center; flex-wrap: wrap; gap: 10px 16px; }
 .summary-statusbar { font-size: 12px; color: var(--muted); margin-bottom: 18px; }
 .summary-actions { margin: 15px 0 20px; }
 .published-summary, .summary-history, .summary-settings { background: white; border: 1px solid var(--line); border-radius: 12px; padding: 24px; margin: 20px 0; }
 .historical-summary { border-color: #b8a3dd; background: #fcfaff; }
+.candidate-summary { border-color: #c9b5df; background: #fcfaff; }
 .summary-meta { font-size: 11px; color: var(--muted); margin: 13px 0; }
 .summary-history h3, .summary-settings h3, .summary-evidence h3, .summary-questions h3 { font-size: 15px; margin-bottom: 14px; }
 .version-list { margin: 14px 0; }

@@ -77,6 +77,7 @@ class SummaryVersion(GeneratedSummary):
 class SummaryView(Contract):
     product_id: str = Field(min_length=1)
     current: SummaryVersion | None
+    initial_candidate: SummaryVersion | None = None
     last_updated_at: datetime | None
     update_threshold: int = Field(strict=True, ge=1, le=100)
     pending_review_count: int = Field(strict=True, ge=0)

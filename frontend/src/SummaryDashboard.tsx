@@ -129,19 +129,35 @@ export function SummaryDashboard({ api, product, reviewVersion = 0 }: { api: Api
     } finally { if (id === requestId.current) setRefreshBusy(false); }
   }
   const version = selectedVersion === null ? view?.current : historical;
+  const candidate = !view?.current && view?.initial_candidate?.product_id === product.id &&
+    view.initial_candidate.kind === "initial" && view.initial_candidate.published_at === null &&
+    (view.initial_candidate.semantic_review?.status === "pending" || view.initial_candidate.semantic_review?.status === "approved")
+    ? view.initial_candidate : null;
   return <div className="summary-dashboard">
-    <div className="heading"><h1>{product.title}</h1><p>Published customer feedback and the evidence behind it.</p></div>
+    <div className="heading"><h1>{product.title}</h1><p>Customer feedback and the evidence behind it.</p></div>
     {!view && loading && <Loading>Loading product summary…</Loading>}
     {error && <ErrorNotice message={error} retry={() => void retryLoad()} />}
     {view && <>
       <div className="summary-statusbar">
-        <span className={`pill ${view.status === "failed" ? "failed" : "ready"}`}>Summary {view.status.replaceAll("_", " ")}</span>
+        <span className={`pill ${view.status === "failed" ? "failed" : "ready"}`}>
+          {candidate ? `Initial summary ${candidate.semantic_review?.status === "approved" ? "awaiting publication" : "validation pending"}` : `Summary ${view.status.replaceAll("_", " ")}`}
+        </span>
         <span>{view.pending_review_count} pending new review{view.pending_review_count === 1 ? "" : "s"}</span>
-        <span>Memory sync: {view.memory_status}</span>
+        {view.current && <span>Memory sync: {view.memory_status}</span>}
       </div>
-      {view.status === "failed" && <ErrorNotice message={`Summary update failed${view.error_code ? ` (${view.error_code})` : ""}. The last published version remains available.`} />}
-      {view.status === "uninitialized" && !view.current && <section className="empty-state"><h2>No published summary yet.</h2><p>A reviewed summary is being prepared for this product. This page updates when it is published.</p></section>}
-      {!view.current && view.status !== "uninitialized" && <section className="empty-state"><h2>No published summary available.</h2><p>Status: {view.status}. This page updates when a summary is published.</p></section>}
+      {view.status === "failed" && <ErrorNotice message={`Summary update failed${view.error_code ? ` (${view.error_code})` : ""}. ${view.current ? "The last published version remains available." : "No summary has been published yet."}`} />}
+      {!view.current && !candidate && (view.status === "uninitialized"
+        ? <section className="empty-state"><h2>No published summary yet.</h2><p>A reviewed summary is being prepared for this product. This page updates when it is published.</p></section>
+        : <section className="empty-state"><h2>No published summary available.</h2><p>Status: {view.status}. This page updates when a summary is published.</p></section>)}
+      {candidate && <article className="published-summary candidate-summary">
+        <div className="section-heading"><h2>Generated initial summary</h2><span className="pill">{candidate.semantic_review?.status === "approved" ? "Awaiting publication" : "Validation pending"}</span></div>
+        <p className="summary-meta">Generated {new Date(candidate.created_at).toLocaleString()} · Version {candidate.version} · Not published</p>
+        <p className="source-label">{coverageLabel(candidate)}</p>
+        <p className="summary-text">{candidate.narrative}</p>
+        {candidate.guidance_references.length > 0 && <p className="fine-print">Guidance used in this draft: {candidate.guidance_references.join(", ")}</p>}
+        <SummaryEvidence version={candidate} />
+        <p className="fine-print">New reviews will be incorporated after the initial summary is published.</p>
+      </article>}
       {view.current && <>
         <div className="summary-actions"><button className="button" disabled={refreshBusy || view.pending_review_count === 0} onClick={() => void refresh()}>{refreshBusy ? "Requesting…" : refreshAttempt.current ? "Retry update request" : "Update now"}</button>
           <button className="text-button" onClick={() => void retryLoad()}>Check for updates</button></div>

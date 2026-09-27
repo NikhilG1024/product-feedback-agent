@@ -44,6 +44,60 @@ it("shows an explicit empty state before publication", async () => {
   expect(progress).not.toHaveBeenCalled();
 });
 
+it("shows a generated initial candidate without treating it as published", async () => {
+  const api = new DemoApi();
+  const published = (await api.summary(headphone.id)).current!;
+  const candidate = { ...published, version: 3, published_at: null,
+    semantic_review: { status: "pending" as const } };
+  vi.spyOn(api, "summary").mockResolvedValue({ product_id: headphone.id, current: null,
+    initial_candidate: candidate, last_updated_at: null, update_threshold: 1,
+    pending_review_count: 2, status: "uninitialized", error_code: null, memory_status: "unknown" });
+  const history = vi.spyOn(api, "summaryHistory");
+  const question = vi.spyOn(api, "summaryQuestion");
+  render(<SummaryDashboard api={api} product={headphone} />);
+  expect(await screen.findByText("Generated initial summary")).toBeInTheDocument();
+  expect(screen.getByText("Validation pending")).toBeInTheDocument();
+  expect(screen.getByText(/Based on 4 sampled historical reviews \+ 0 new reviews/)).toBeInTheDocument();
+  expect(screen.getByRole("region", { name: "Evidence for version 3" })).toBeInTheDocument();
+  expect(screen.getByText(/New reviews will be incorporated after the initial summary is published/)).toBeInTheDocument();
+  expect(screen.queryByText("No published summary yet.")).not.toBeInTheDocument();
+  expect(screen.queryByText("Current published summary")).not.toBeInTheDocument();
+  expect(screen.queryByRole("button", { name: "View version history" })).not.toBeInTheDocument();
+  expect(screen.queryByRole("textbox", { name: "Question" })).not.toBeInTheDocument();
+  expect(history).not.toHaveBeenCalled();
+  expect(question).not.toHaveBeenCalled();
+});
+
+it("labels an approved initial candidate as awaiting publication", async () => {
+  const api = new DemoApi();
+  const base = await api.summary(headphone.id);
+  vi.spyOn(api, "summary").mockResolvedValue({ ...base, current: null, last_updated_at: null,
+    initial_candidate: { ...base.current!, published_at: null, semantic_review: { status: "approved" } } });
+  render(<SummaryDashboard api={api} product={headphone} />);
+  expect(await screen.findByText("Awaiting publication")).toBeInTheDocument();
+  expect(screen.queryByText("Validation pending")).not.toBeInTheDocument();
+  expect(screen.queryByText("Current published summary")).not.toBeInTheDocument();
+});
+
+it("replaces a generated candidate with the current published summary on poll", async () => {
+  vi.useFakeTimers();
+  try {
+    const api = new DemoApi();
+    Object.defineProperty(api, "demo", { value: false });
+    const published = await api.summary(headphone.id);
+    const candidateView: SummaryView = { ...published, current: null,
+      initial_candidate: { ...published.current!, published_at: null,
+        semantic_review: { status: "pending" } }, last_updated_at: null, status: "uninitialized" };
+    vi.spyOn(api, "summary").mockResolvedValueOnce(candidateView).mockResolvedValue(published);
+    render(<SummaryDashboard api={api} product={headphone} />);
+    await act(async () => { await Promise.resolve(); });
+    expect(screen.getByText("Generated initial summary")).toBeInTheDocument();
+    await act(async () => { await vi.advanceTimersByTimeAsync(5000); });
+    expect(screen.getByText("Current published summary")).toBeInTheDocument();
+    expect(screen.queryByText("Generated initial summary")).not.toBeInTheDocument();
+  } finally { vi.useRealTimers(); }
+});
+
 it("polls the selected product until its published summary appears", async () => {
   vi.useFakeTimers();
   try {

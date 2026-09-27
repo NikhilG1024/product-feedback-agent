@@ -238,21 +238,51 @@ def test_two_pilot_drafts_are_durable_but_only_approved_selected_draft_is_public
     second = first.model_copy(update={"job_id": "pilot-b", "narrative": "Another pilot"})
     second_raw = GeneratedSummary(narrative="Another pilot", themes=[]).model_dump_json().encode("utf-8")
     first_id = repo.stage_initial_draft("P", first, raw, {"run": "one"})
+    assert repo.current("P").initial_candidate.job_id == "pilot-a"
+    assert repo.current("P").initial_candidate.semantic_review.status == "pending"
     second_id = repo.stage_initial_draft("P", second, second_raw, {"run": "one"})
     assert first_id != second_id
     assert repo.stage_initial_draft("P", first, raw, {"run": "one"}) == first_id
     assert repo.current("P").current is None
+    assert repo.current("P").initial_candidate.job_id == "pilot-b"
     assert repo.history("P", None, 10).items == []
     review_result = SemanticReview(status="approved", reviewer_id="human-1",
         reviewer_type="human", reviewed_at=NOW,
         artifact_sha256=__import__("hashlib").sha256(second_raw).hexdigest(),
         rubric_version="v1", factual_support=True, coverage=True, classification=True)
     assert repo.apply_semantic_review("P", second_id, review_result)
+    repo.states.update_one({"_id": "P"}, {"$set": {"error_code": "stale_error",
+                                                "next_attempt_at": NOW}})
     claim = repo.claim_initial_candidate("P", second_id, NOW, 30)
     assert repo.publish(claim, second_id, NOW)
     assert repo.current("P").current.job_id == "pilot-b"
+    assert repo.current("P").initial_candidate is None
+    state = repo.states.find_one({"_id": "P"})
+    assert "error_code" not in state
+    assert "next_attempt_at" not in state
     assert repo.version("P", repo.draft(first_id).version) is None
     assert [v.job_id for v in repo.history("P", None, 10).items] == ["pilot-b"]
+
+
+def test_rejected_initial_draft_is_not_previewed(repo):
+    generated = GeneratedSummary(narrative="Rejected candidate", themes=[])
+    draft = SummaryVersion(product_id="P", version=1, parent_version=None,
+        job_id="rejected-pilot", kind="initial", narrative=generated.narrative,
+        themes=[], coverage=SummaryCoverage(historical_sample_count=0, new_review_count=0),
+        delta_review_ids=[], model_identity="pinned", prompt_version="v1",
+        guidance_references=[], created_at=NOW)
+    version_id = repo.stage_initial_draft("P", draft,
+        generated.model_dump_json().encode("utf-8"), {"run": "rejected"})
+    assert repo.current("P").initial_candidate.job_id == "rejected-pilot"
+    rejected = SemanticReview(status="rejected", reviewer_id="reviewer-1",
+        reviewer_type="human", reviewed_at=NOW, rubric_version="v1",
+        artifact_sha256=__import__("hashlib").sha256(
+            generated.model_dump_json().encode("utf-8")).hexdigest())
+    assert repo.apply_semantic_review("P", version_id, rejected)
+    view = repo.current("P")
+    assert view.current is None
+    assert view.initial_candidate is None
+    assert repo.history("P", None, 10).items == []
 
 
 def test_draining_eligible_boundary_leaves_new_arrival_for_later_threshold(repo):

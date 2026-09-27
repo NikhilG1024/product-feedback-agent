@@ -187,6 +187,7 @@ export interface SummaryVersion {
 export interface SummaryView {
   product_id: string;
   current: SummaryVersion | null;
+  initial_candidate?: SummaryVersion | null;
   last_updated_at: string | null;
   update_threshold: number;
   pending_review_count: number;

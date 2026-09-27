@@ -668,7 +668,8 @@ class SummaryRepository:
              "job.owner_token": claim.owner_token, "job.job_id": claim.job_id,
              "job.lease_expires_at": {"$gt": now}},
             {"$set": {"current_version": candidate["version"], "last_updated_at": now,
-                      "status": "ready"}})
+                      "status": "ready"},
+             "$unset": {"error_code": "", "next_attempt_at": ""}})
         if updated.matched_count != 1:
             return False
         self.reconcile(claim.product_id)
@@ -736,6 +737,13 @@ class SummaryRepository:
         document = self.versions.find_one({"product_id": product_id,
                                            "version": state["current_version"]}) if state.get("current_version") else None
         version = _public_version(document) if document else None
+        initial_candidate = None
+        if version is None:
+            draft = self.versions.find_one({"product_id": product_id, "kind": "initial",
+                "parent_version": None, "published_at": None,
+                "semantic_review.status": {"$in": ["pending", "approved"]}},
+                sort=[("version", -1)])
+            initial_candidate = _public_version(draft) if draft else None
         pending = self._pending_count(product_id)
         status = state.get("status") or ("uninitialized" if version is None else "ready")
         if state.get("job") is None and status != "failed":
@@ -746,6 +754,7 @@ class SummaryRepository:
             else:
                 status = "waiting" if pending else "ready"
         return SummaryView(product_id=product_id, current=version,
+                           initial_candidate=initial_candidate,
                            last_updated_at=version.published_at if version else None,
                            update_threshold=state.get("update_threshold", 1),
                            pending_review_count=pending, status=status,
