@@ -63,3 +63,53 @@ V2_INDEXES['reviews'] += [IDEMPOTENCY_INDEX,{'name':'product_time_cursor','keys'
 for name in ('reviews','decisions','analysis_runs'):
     V2_INDEXES[name].append({'name':'processing_queue','keys':[('processing.status',1),('processing.next_attempt_at',1),('processing.lease_expires_at',1)]})
 V2_INDEXES['rate_limits']=[{'name':'rate_expiry','keys':[('expires_at',1)],'expireAfterSeconds':0}]
+
+# Separate additive inventory; v2 importers continue to use V2_SCHEMAS/INDEXES.
+SUMMARY_EVIDENCE = {'bsonType':'object','required':['review_id','quote'],
+    'properties':{'review_id':S,'quote':{'bsonType':'string','minLength':1,'maxLength':500}}}
+SUMMARY_THEME = {'bsonType':'object','required':['id','description','issue_type','polarity','evidence'],
+    'properties':{'id':S,'description':S,
+        'issue_type':{'enum':['reported_defect','preference','feature_request','other']},
+        'polarity':{'enum':['positive','negative','mixed','neutral']},
+        'evidence':{'bsonType':'array','minItems':1,'maxItems':3,'items':SUMMARY_EVIDENCE}}}
+SUMMARY_SEMANTIC_REVIEW = {'bsonType':'object','required':['status'],
+    'properties':{'status':{'enum':['pending','approved','rejected']},
+        'reviewer_id':S,'reviewer_type':{'enum':['human','automated']},
+        'reviewed_at':D,'artifact_sha256':{'bsonType':'string','minLength':64,'maxLength':64},
+        'rubric_version':S,'factual_support':B,'coverage':B,'classification':B}}
+V3_SCHEMAS = {
+ 'product_summary_state': schema(['product_id'], dict(
+    product_id=S, current_version={'bsonType':['int','long','null'],'minimum':1},
+    next_version={'bsonType':['int','long'],'minimum':1},
+    update_threshold={'bsonType':['int','long'],'minimum':1,'maximum':100},
+    status={'enum':['uninitialized','waiting','queued','updating','ready','failed']},
+    lease_expires_at=D, next_attempt_at=D, job_id=S,
+    semantic_review=SUMMARY_SEMANTIC_REVIEW)),
+ 'product_summary_versions': schema(['product_id','version','job_id','kind','narrative','themes','coverage','created_at'], dict(
+    product_id=S,version={'bsonType':['int','long'],'minimum':1},
+    parent_version={'bsonType':['int','long','null'],'minimum':1},job_id=S,
+    kind={'enum':['initial','reviews','guidance']},
+    narrative={'bsonType':'string','minLength':1,'maxLength':4000},
+    themes={'bsonType':'array','maxItems':30,'items':SUMMARY_THEME},
+    coverage={'bsonType':'object','required':['historical_sample_count','new_review_count'],
+        'properties':{'historical_sample_count':I,'new_review_count':I}},
+    delta_review_ids={'bsonType':'array','maxItems':20,'items':S},
+    manifest_ref={'bsonType':['string','null']},model_identity=S,prompt_version=S,
+    guidance_references={'bsonType':'array','items':S},created_at=D,
+    published_at={'bsonType':['date','null']},semantic_review=SUMMARY_SEMANTIC_REVIEW)),
+ 'product_summary_inputs': schema(['product_id','review_id','source','admitted_at','admission_sequence'], dict(
+    product_id=S,review_id=S,source=S,admitted_at=D,
+    admission_sequence={'bsonType':['int','long'],'minimum':0},
+    incorporated_version={'bsonType':['int','long','null'],'minimum':1})),
+}
+V3_INDEXES = {
+ 'product_summary_state': [
+    {'name':'product_queue','keys':[('status',1),('next_attempt_at',1),('lease_expires_at',1)]}],
+ 'product_summary_versions': [
+    {'name':'product_version','keys':[('product_id',1),('version',1)],'unique':True},
+    {'name':'product_job','keys':[('product_id',1),('job_id',1)],'unique':True},
+    {'name':'product_history','keys':[('product_id',1),('version',-1)]}],
+ 'product_summary_inputs': [
+    {'name':'product_review','keys':[('product_id',1),('review_id',1)],'unique':True},
+    {'name':'pending_product_inputs','keys':[('product_id',1),('incorporated_version',1),('admission_sequence',1),('_id',1)]}],
+}
