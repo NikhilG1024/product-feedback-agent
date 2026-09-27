@@ -51,6 +51,9 @@ def read_progress(path: str, stale_seconds: int, *, now: datetime | None = None)
         if status not in {"running", "completed", "completed_with_failures", "paused_quality_review"}:
             return unavailable
         counts = {name: _count(source_data[name]) for name in ("total", "workers", "completed", "failed", "active", "queued")}
+        reused = _count(source_data.get("reused", 0))
+        if reused > counts["completed"]:
+            return unavailable
         if counts["workers"] < 1 or counts["workers"] > 1000:
             return unavailable
         if _count(source_data["published"]) > counts["total"]:
@@ -75,6 +78,7 @@ def read_progress(path: str, stale_seconds: int, *, now: datetime | None = None)
                 item["elapsed_seconds"] = elapsed
             items.append(item)
         if (sum(item["status"] in DONE for item in items) != counts["completed"] or
+                sum(item["status"] == "reused" for item in items) != reused or
                 sum(item["status"] == "needs_review" for item in items) != counts["failed"] or
                 sum(item["status"] == "generating" for item in items) != counts["active"] or
                 sum(item["status"] == "queued" for item in items) != counts["queued"]):
@@ -87,7 +91,7 @@ def read_progress(path: str, stale_seconds: int, *, now: datetime | None = None)
             return unavailable
         items.sort(key=lambda item: item["id"])
         progress = {"run_id": run_id, "started_at": started.isoformat(), "updated_at": updated.isoformat(),
-                    "status": status, **counts, "published": None, "products": items}
+                    "status": status, **counts, "reused": reused, "published": None, "products": items}
         if status == "paused_quality_review":
             progress["pause_explanation"] = PAUSE_EXPLANATION
         elapsed = source_data.get("elapsed_seconds")

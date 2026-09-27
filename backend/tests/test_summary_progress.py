@@ -105,3 +105,19 @@ def test_quality_review_pause_rejects_active_products(tmp_path, settings):
     path.write_text(json.dumps(paused))
     client = TestClient(create_app(replace(settings, summary_initialization_progress_path=str(path))))
     assert get(client).json() == {"availability": "unavailable", "progress": None}
+
+
+def test_reused_count_matches_products_and_defaults_to_zero(tmp_path, settings):
+    path = tmp_path / "progress.json"
+    client = TestClient(create_app(replace(settings, summary_initialization_progress_path=str(path))))
+    source = payload(datetime.now(timezone.utc))
+    path.write_text(json.dumps(source))
+    assert get(client).json()["progress"]["reused"] == 0
+    source["reused"] = 1
+    source["products"]["B1"]["status"] = "reused"
+    path.write_text(json.dumps(source))
+    assert get(client).json()["progress"]["reused"] == 1
+    for invalid in (True, -1, 2, 0):
+        source["reused"] = invalid
+        path.write_text(json.dumps(source))
+        assert get(client).json() == {"availability": "unavailable", "progress": None}
