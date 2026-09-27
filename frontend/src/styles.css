@@ -1206,6 +1206,25 @@ fieldset:disabled {
   font-size: 11px;
   color: var(--muted);
 }
+.summary-dashboard .heading { margin-bottom: 24px; }
+.summary-statusbar, .summary-actions, .version-list { display: flex; align-items: center; flex-wrap: wrap; gap: 10px 16px; }
+.summary-statusbar { font-size: 12px; color: var(--muted); margin-bottom: 18px; }
+.summary-actions { margin: 15px 0 20px; }
+.published-summary, .summary-history, .summary-settings { background: white; border: 1px solid var(--line); border-radius: 12px; padding: 24px; margin: 20px 0; }
+.historical-summary { border-color: #b8a3dd; background: #fcfaff; }
+.summary-meta { font-size: 11px; color: var(--muted); margin: 13px 0; }
+.summary-history h3, .summary-settings h3, .summary-evidence h3, .summary-questions h3 { font-size: 15px; margin-bottom: 14px; }
+.version-list { margin: 14px 0; }
+.version-list .active { border-color: var(--blue); color: var(--blue); background: #eef3ff; }
+.summary-evidence { margin: 25px 0; }
+.summary-evidence h4 { font-size: 13px; }
+.summary-evidence blockquote { line-height: 1.7; margin: 14px 0 0; white-space: pre-wrap; overflow-wrap: anywhere; }
+.summary-evidence cite { font-style: normal; margin-top: 6px; }
+.summary-settings { max-width: 460px; }
+.summary-settings .field { margin: 0 0 15px; }
+.summary-questions form { display: flex; align-items: end; gap: 12px; }
+.summary-questions .field { flex: 1; margin: 0; }
+@media (max-width: 760px) { .published-summary, .summary-history, .summary-settings { padding: 19px; } .summary-questions form { align-items: stretch; flex-direction: column; } }
 .questions form {
   display: flex;
   align-items: flex-end;

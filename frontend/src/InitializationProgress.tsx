@@ -27,7 +27,7 @@ export function InitializationProgress({ api }: { api: Api }) {
         setItems(next.progress?.products ?? []);
         setNextOffset(next.progress?.next_offset ?? null);
         setLoadError(false);
-        if (!api.demo && (!next.progress || next.progress.status === "running")) timer = setTimeout(poll, 5000);
+        if (!api.demo && (!next.progress || ["running", "paused_quality_review"].includes(next.progress.status))) timer = setTimeout(poll, 5000);
       } catch {
         if (cancelled) return;
         setLoadError(true);
@@ -48,11 +48,11 @@ export function InitializationProgress({ api }: { api: Api }) {
     } catch { setLoadError(true); }
   }
   const progress = result?.progress;
-  const processed = progress ? progress.completed + progress.failed : 0;
+  const processed = progress ? Math.max(0, progress.completed + progress.failed - (progress.reused ?? 0)) : 0;
   const now = Date.now();
-  const elapsed = progress ? Math.max(0, (now - Date.parse(progress.started_at)) / 1000) : 0;
+  const elapsed = progress ? Math.max(0, progress.elapsed_seconds ?? (now - Date.parse(progress.started_at)) / 1000) : 0;
   const remainingSeconds = progress && result?.availability === "available" && progress.status === "running" && processed >= 6
-    ? Math.max(0, Math.ceil(elapsed / processed * (progress.total - processed)))
+    ? Math.max(0, Math.ceil(elapsed / processed * (progress.total - progress.completed - progress.failed)))
     : null;
   const remainingMinutes = remainingSeconds === null ? null : Math.max(1, Math.round(remainingSeconds / 60));
   return (
@@ -73,7 +73,9 @@ export function InitializationProgress({ api }: { api: Api }) {
           <p>Published summaries: unknown. Citation checks do not publish a summary.</p>
           <p>Last progress update: {new Date(progress.updated_at).toLocaleString()} · Run {progress.run_id}</p>
           {progress.status === "running" && <p>{result.availability === "stale" ? "Elapsed since start (progress stale)" : "Elapsed"}: {Math.floor(elapsed / 60)} min</p>}
-          {progress.status !== "running" ? (
+          {progress.status === "paused_quality_review" ? (
+            <p role="status">Paused for quality review. Checking for a safe resume. Finish estimate unavailable.</p>
+          ) : progress.status !== "running" ? (
             <p>Initialization finished. Semantic review and publication are separate steps.</p>
           ) : result.availability === "stale" ? (
             <p>Estimate unavailable until progress updates.</p>

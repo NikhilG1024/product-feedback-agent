@@ -13,6 +13,8 @@ import type {
   Source,
   Submission,
   InitializationProgressResponse,
+  SummaryView,
+  SummaryVersion,
 } from "./types";
 const messages: Record<string, string> = {
   historical_batch_required: "Choose a review group for past Amazon reviews.",
@@ -77,6 +79,26 @@ export const errorMessage = (error: unknown) =>
     : "Something went wrong. Please try again.";
 export class HttpApi implements Api {
   readonly demo = false;
+  summary(product: string) {
+    return this.request<SummaryView>(`/products/${encodeURIComponent(product)}/summary`);
+  }
+  summaryHistory(product: string, cursor?: string) {
+    const q = new URLSearchParams({ limit: "20" });
+    if (cursor) q.set("cursor", cursor);
+    return this.request<Page<SummaryVersion>>(`/products/${encodeURIComponent(product)}/summary/history?${q}`);
+  }
+  summaryVersion(product: string, version: number) {
+    return this.request<SummaryVersion>(`/products/${encodeURIComponent(product)}/summary/versions/${version}`);
+  }
+  summarySettings(product: string, threshold: number) {
+    return this.request<SummaryView>(`/products/${encodeURIComponent(product)}/summary/settings`, "PATCH", { update_threshold: threshold });
+  }
+  refreshSummary(product: string, reason: "pending_reviews" | "guidance", key: string) {
+    return this.request<SummaryView>(`/products/${encodeURIComponent(product)}/summary/refresh`, "POST", { reason }, { "Idempotency-Key": key });
+  }
+  summaryQuestion(product: string, version: number, question: string) {
+    return this.request<Answer>(`/products/${encodeURIComponent(product)}/summary/questions`, "POST", { version, question });
+  }
   summaryProgress(offset = 0) {
     return this.request<InitializationProgressResponse>(
       `/summary-initialization/progress?offset=${offset}&limit=20`,

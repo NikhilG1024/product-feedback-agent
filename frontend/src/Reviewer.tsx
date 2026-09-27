@@ -141,6 +141,16 @@ export function Reviewer({
               <StatePill state={result.processing?.memory_status} />
             </div>
             <div className="status-row">
+              <span>Product summary</span>
+              <span className="pill">{result.summary?.status === "included" && result.summary.version
+                ? `Included in version ${result.summary.version}`
+                : result.summary?.status === "waiting" ? "Awaiting update threshold"
+                : result.summary?.status === "queued" ? "Update queued"
+                : result.summary?.status === "updating" ? "Updating"
+                : result.summary?.status === "failed" ? "Update failed; review saved"
+                : "Saved; summary status pending"}</span>
+            </div>
+            <div className="status-row">
               <span>Finding issues in your review</span>
               <StatePill state={result.processing?.classification_status} />
             </div>

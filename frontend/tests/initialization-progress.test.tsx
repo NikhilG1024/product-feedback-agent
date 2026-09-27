@@ -28,6 +28,30 @@ it("labels sample telemetry as unavailable", async () => {
   expect(await screen.findByText(/Live initialization progress is unavailable in sample mode/)).toBeInTheDocument();
 });
 
+it("keeps polling during quality review pause without exposing raw reason or ETA", async () => {
+  vi.useFakeTimers();
+  try {
+  const api = new DemoApi();
+  Object.defineProperty(api, "demo", { value: false });
+  const poll = vi.spyOn(api, "summaryProgress").mockResolvedValue({
+    availability: "available",
+    progress: {
+      run_id: "run-a", started_at: "2026-09-27T12:00:00Z",
+      updated_at: "2026-09-27T12:06:00Z", status: "paused_quality_review",
+      pause_reason: "untrusted internal detail", total: 12, workers: 6,
+      completed: 6, failed: 0, active: 0, queued: 6, published: null,
+      next_offset: null, products: [],
+    },
+  });
+  await act(async () => { render(<InitializationProgress api={api} />); });
+  expect(screen.getByText(/Paused for quality review/)).toBeInTheDocument();
+  expect(screen.queryByText(/untrusted internal detail/)).not.toBeInTheDocument();
+  expect(screen.queryByText(/Estimated local finish/)).not.toBeInTheDocument();
+  await act(async () => { await vi.advanceTimersByTimeAsync(5000); });
+  expect(poll).toHaveBeenCalledTimes(2);
+  } finally { vi.useRealTimers(); }
+});
+
 it("drops an old page when polling switches to a new run", async () => {
   vi.useFakeTimers();
   try {
@@ -99,4 +123,17 @@ it.each([
   } finally {
     vi.useRealTimers();
   }
+});
+
+it("does not count reused products toward throughput estimate", async () => {
+  const api = new DemoApi();
+  Object.defineProperty(api, "demo", { value: false });
+  vi.spyOn(api, "summaryProgress").mockResolvedValue({ availability: "available", progress: {
+    run_id: "reuse", started_at: "2026-09-27T12:00:00Z", updated_at: "2026-09-27T12:06:00Z",
+    status: "running", total: 100, workers: 6, completed: 60, reused: 56, failed: 0,
+    active: 6, queued: 34, published: null, next_offset: null, products: [],
+  }});
+  render(<InitializationProgress api={api} />);
+  expect(await screen.findByText(/Estimating finish after 6 products/)).toBeInTheDocument();
+  expect(screen.queryByText(/Approx\./)).not.toBeInTheDocument();
 });

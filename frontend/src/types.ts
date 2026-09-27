@@ -12,10 +12,12 @@ export interface InitializationProgressResponse {
     run_id: string;
     started_at: string;
     updated_at: string;
-    status: "running" | "completed" | "completed_with_failures";
+    status: "running" | "paused_quality_review" | "completed" | "completed_with_failures";
+    pause_reason?: string | null;
     total: number;
     workers: number;
     completed: number;
+    reused?: number;
     failed: number;
     active: number;
     queued: number;
@@ -39,6 +41,11 @@ export interface Processing {
 export interface Submission {
   id: string;
   processing: Processing | null;
+  summary?: ReviewerSummaryStatus | null;
+}
+export interface ReviewerSummaryStatus {
+  status: "saved" | "waiting" | "queued" | "updating" | "included" | "failed";
+  version: number | null;
 }
 export interface ReviewInput {
   title: string;
@@ -126,6 +133,12 @@ export interface Decision {
 }
 export interface Api {
   summaryProgress(offset?: number): Promise<InitializationProgressResponse>;
+  summary(product: string): Promise<SummaryView>;
+  summaryHistory(product: string, cursor?: string): Promise<Page<SummaryVersion>>;
+  summaryVersion(product: string, version: number): Promise<SummaryVersion>;
+  summarySettings(product: string, threshold: number): Promise<SummaryView>;
+  refreshSummary(product: string, reason: "pending_reviews" | "guidance", key: string): Promise<SummaryView>;
+  summaryQuestion(product: string, version: number, question: string): Promise<Answer>;
   question(product: string, run: string, question: string): Promise<Answer>;
   readonly demo: boolean;
   products(cursor?: string): Promise<Page<Product>>;
@@ -142,6 +155,44 @@ export interface Api {
   findings(product: string, run: string): Promise<Findings>;
   decision(product: string, body: DecisionInput): Promise<Decision>;
   decisions(product: string): Promise<Decision[]>;
+}
+
+export interface SummaryEvidencePair { review_id: string; quote: string }
+export interface SummaryTheme {
+  id: string;
+  description: string;
+  issue_type: "reported_defect" | "preference" | "feature_request" | "other";
+  polarity: "positive" | "negative" | "mixed" | "neutral";
+  evidence: SummaryEvidencePair[];
+}
+export interface SummaryVersion {
+  product_id: string;
+  version: number;
+  parent_version: number | null;
+  job_id: string;
+  kind: "initial" | "reviews" | "guidance";
+  narrative: string;
+  themes: SummaryTheme[];
+  contradictions: string[];
+  coverage: { historical_sample_count: number; new_review_count: number };
+  delta_review_ids: string[];
+  manifest_ref: string | null;
+  model_identity: string;
+  prompt_version: string;
+  guidance_references: string[];
+  created_at: string;
+  published_at: string | null;
+  semantic_review?: { status: "pending" | "approved" | "rejected" };
+}
+export interface SummaryView {
+  product_id: string;
+  current: SummaryVersion | null;
+  last_updated_at: string | null;
+  update_threshold: number;
+  pending_review_count: number;
+  status: "uninitialized" | "waiting" | "queued" | "updating" | "ready" | "failed";
+  error_code: string | null;
+  memory_status: string;
 }
 
 export interface Answer {

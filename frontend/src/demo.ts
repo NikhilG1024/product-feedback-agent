@@ -11,6 +11,8 @@ import type {
   Source,
   Submission,
   InitializationProgressResponse,
+  SummaryView,
+  SummaryVersion,
 } from "./types";
 const products = [
   {
@@ -68,6 +70,92 @@ const quotes: Record<string, string[]> = {
 const clone = <T>(x: T): T => structuredClone(x);
 export class DemoApi implements Api {
   readonly demo = true;
+  private summaryVersions = new Map<string, SummaryVersion[]>();
+  private thresholds = new Map<string, number>();
+  private refreshKeys = new Map<string, string>();
+  private versions(product: string): SummaryVersion[] {
+    if (!products.some((p) => p.id === product)) throw new ApiError(404, "missing");
+    if (!this.summaryVersions.has(product)) {
+      const version: SummaryVersion = {
+        product_id: product, version: 1, parent_version: null,
+        job_id: `${product}-initial`, kind: "initial",
+        narrative: `Illustrative summary for ${products.find((p) => p.id === product)!.title}. ${themes[product][0]} and ${themes[product][1].toLowerCase()} appear in this small sample.`,
+        themes: themes[product].map((description, i) => ({
+          id: `${product}-theme-${i}`, description,
+          issue_type: i === 3 ? "feature_request" : "reported_defect",
+          polarity: "negative", evidence: [{ review_id: `${product}-review-${i}`, quote: quotes[product][i] }],
+        })),
+        contradictions: [], coverage: { historical_sample_count: 4, new_review_count: 0 },
+        delta_review_ids: [], manifest_ref: `${product}-sample`,
+        model_identity: "illustrative-demo", prompt_version: "demo-1", guidance_references: [],
+        created_at: "2026-09-01T12:00:00Z", published_at: "2026-09-01T12:00:00Z",
+        semantic_review: { status: "approved" },
+      };
+      this.summaryVersions.set(product, [version]);
+    }
+    return this.summaryVersions.get(product)!;
+  }
+  private view(product: string): SummaryView {
+    const versions = this.versions(product);
+    const current = versions[versions.length - 1];
+    const pending = this.newReviews.filter((r) => r.parent_asin === product && !versions.some((v) => v.delta_review_ids.includes(r.id))).length;
+    return clone({ product_id: product, current, last_updated_at: current.published_at,
+      update_threshold: this.thresholds.get(product) ?? 1,
+      pending_review_count: pending, status: pending ? "waiting" : "ready",
+      error_code: null, memory_status: "not_applicable" });
+  }
+  async summary(product: string) { return this.view(product); }
+  async summaryHistory(product: string, cursor?: string) {
+    const list = [...this.versions(product)].reverse();
+    const offset = cursor ? Number(cursor) : 0;
+    if (!Number.isSafeInteger(offset) || offset < 0) throw new ApiError(422, "invalid_cursor");
+    return { items: clone(list.slice(offset, offset + 2)), next_cursor: offset + 2 < list.length ? String(offset + 2) : null };
+  }
+  async summaryVersion(product: string, version: number) {
+    const found = this.versions(product).find((v) => v.version === version);
+    if (!found) throw new ApiError(404, "missing");
+    return clone(found);
+  }
+  async summarySettings(product: string, threshold: number) {
+    if (!Number.isInteger(threshold) || threshold < 1 || threshold > 100) throw new ApiError(422, "invalid_threshold");
+    this.thresholds.set(product, threshold);
+    this.publishPending(product);
+    return this.view(product);
+  }
+  private publishPending(product: string) {
+    const view = this.view(product);
+    if (view.pending_review_count < view.update_threshold) return;
+    const parent = view.current!;
+    const pending = this.newReviews.filter((r) => r.parent_asin === product && !this.versions(product).some((v) => v.delta_review_ids.includes(r.id)));
+    const next: SummaryVersion = { ...clone(parent), version: parent.version + 1,
+      parent_version: parent.version, job_id: crypto.randomUUID(), kind: "reviews",
+      narrative: `${parent.narrative} ${pending.length} new review${pending.length === 1 ? "" : "s"} added in sample mode.`,
+      coverage: { ...parent.coverage, new_review_count: parent.coverage.new_review_count + pending.length },
+      delta_review_ids: pending.map((r) => r.id), created_at: new Date().toISOString(),
+      published_at: new Date().toISOString(),
+    };
+    this.versions(product).push(next);
+  }
+  async refreshSummary(product: string, reason: "pending_reviews" | "guidance", key: string) {
+    const digest = `${product}:${reason}`;
+    if (this.refreshKeys.has(key)) {
+      if (this.refreshKeys.get(key) !== digest) throw new ApiError(409, "idempotency_conflict");
+      return this.view(product);
+    }
+    this.refreshKeys.set(key, digest);
+    if (reason === "pending_reviews") {
+      const current = this.thresholds.get(product) ?? 1;
+      this.thresholds.set(product, 1);
+      this.publishPending(product);
+      this.thresholds.set(product, current);
+    }
+    return this.view(product);
+  }
+  async summaryQuestion(product: string, version: number, _question: string) {
+    const selected = await this.summaryVersion(product, version);
+    return { answer: `Illustrative answer based on version ${version}: ${selected.narrative}`,
+      evidence: selected.themes.flatMap((t) => t.evidence).slice(0, 2), insufficient_evidence: false };
+  }
   async summaryProgress(): Promise<InitializationProgressResponse> {
     return { availability: "unavailable", progress: null };
   }
@@ -145,12 +233,21 @@ export class DemoApi implements Api {
       batch_id: null,
       processing: row.processing,
     });
+    this.publishPending(product);
+    const view = this.view(product);
+    row.summary = view.current?.delta_review_ids.includes(row.id)
+      ? { status: "included", version: view.current.version }
+      : { status: "waiting", version: null };
+    this.submissions.set(key, row);
     return clone(row);
   }
-  async status(id: string) {
+  async status(id: string): Promise<Submission> {
     const result = [...this.submissions.values()].find((r) => r.id === id);
     if (!result) throw new ApiError(404, "missing");
-    return clone(result);
+    const review = this.newReviews.find((r) => r.id === id)!;
+    const current = this.view(review.parent_asin).current;
+    return clone({ ...result, summary: current?.delta_review_ids.includes(id)
+      ? { status: "included", version: current.version } : { status: "waiting", version: null } });
   }
   async analyze(product: string, body: AnalysisInput) {
     const live = this.newReviews.filter((r) => r.parent_asin === product);

@@ -13,6 +13,7 @@ import type { Api, Product } from "./types";
 import { HttpApi, errorMessage } from "./api";
 import { DemoApi } from "./demo";
 import { Dashboard } from "./Dashboard";
+import { SummaryDashboard } from "./SummaryDashboard";
 import { Reviewer } from "./Reviewer";
 import { ErrorNotice, Loading, Modal } from "./ui";
 function Connection({
@@ -97,7 +98,7 @@ function Workspace({
     [error, setError] = useState(""),
     [picker, setPicker] = useState(false),
     [query, setQuery] = useState(""),
-    [view, setView] = useState<"pm" | "reviewer">("pm"),
+    [view, setView] = useState<"pm" | "reviewer" | "legacy">("pm"),
     [reviewVersion, setReviewVersion] = useState(0);
   const alive = useRef(true);
   useEffect(() => {
@@ -175,6 +176,9 @@ function Workspace({
               <MessageSquare size={17} />
               Write a review
             </button>
+            <button className={view === "legacy" ? "active" : ""} onClick={() => setView("legacy")}>
+              <LayoutGrid size={17} /> Legacy analysis
+            </button>
           </nav>
           <div className="sidebar-bottom">
             <span className="connection-dot" />
@@ -239,12 +243,13 @@ function Workspace({
             ) : (
               <div key={selected.id}>
                 <div hidden={view !== "pm"}>
-                  <Dashboard
+                  <SummaryDashboard
                     api={api}
                     product={selected}
                     reviewVersion={reviewVersion}
                   />
                 </div>
+                {view === "legacy" && <Dashboard api={api} product={selected} reviewVersion={reviewVersion} />}
                 <div hidden={view !== "reviewer"}>
                   <Reviewer
                     api={api}
