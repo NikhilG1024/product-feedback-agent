@@ -21,6 +21,11 @@ class ReviewRepository:
         query={'_id':{'$gt':cursor}} if cursor else {}
         return list(self.database.products.find(query,{'title':1,'product_type':1}).sort('_id',1).limit(limit+1))
 
+    def available_batches(self, product_id):
+        query={'held_out':False,'label':{'$ne':'C'},
+               '$expr':{'$gt':[{'$getField':{'input':'$product_counts','field':{'$literal':product_id}}},0]}}
+        return list(self.database.batches.find(query,{'label':1,'product_counts':1}).sort('_id',1).limit(101))
+
     def known_variants(self, product):
         known=set(product.get('asins',[])) | set(product.get('variant_asins',[]))
         for variant in product.get('variants',[]):

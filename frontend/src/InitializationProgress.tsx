@@ -14,11 +14,11 @@ export function InitializationProgress({ api }: { api: Api }) {
   const [items, setItems] = useState<NonNullable<InitializationProgressResponse["progress"]>["products"]>([]);
   const [nextOffset, setNextOffset] = useState<number | null>(null);
   const [loadError, setLoadError] = useState(false);
+  const [refreshVersion, setRefreshVersion] = useState(0);
   const currentRunId = useRef<string | null>(null);
   useEffect(() => {
     let cancelled = false;
-    let timer: ReturnType<typeof setTimeout>;
-    async function poll() {
+    async function load() {
       try {
         const next = await api.summaryProgress();
         if (cancelled) return;
@@ -27,16 +27,14 @@ export function InitializationProgress({ api }: { api: Api }) {
         setItems(next.progress?.products ?? []);
         setNextOffset(next.progress?.next_offset ?? null);
         setLoadError(false);
-        if (!api.demo && (!next.progress || ["running", "paused_quality_review"].includes(next.progress.status))) timer = setTimeout(poll, 5000);
       } catch {
         if (cancelled) return;
         setLoadError(true);
-        timer = setTimeout(poll, 5000);
       }
     }
-    void poll();
-    return () => { cancelled = true; clearTimeout(timer); };
-  }, [api]);
+    void load();
+    return () => { cancelled = true; };
+  }, [api, refreshVersion]);
   async function more() {
     if (nextOffset === null || !result?.progress) return;
     const runId = result.progress.run_id;
@@ -58,10 +56,11 @@ export function InitializationProgress({ api }: { api: Api }) {
   return (
     <section className="notice" aria-label="Initialization progress">
       <h2>Product summary initialization</h2>
+      {!api.demo && <button className="button" onClick={() => setRefreshVersion((n) => n + 1)}>Refresh progress</button>}
       {api.demo ? (
         <p>Live initialization progress is unavailable in sample mode.</p>
       ) : loadError ? (
-        <p>Progress could not be loaded. Checking again shortly.</p>
+        <p>Progress could not be loaded. Use Refresh progress to try again.</p>
       ) : !result ? (
         <p>Loading initialization progress…</p>
       ) : result.availability === "unavailable" || !progress ? (
@@ -74,16 +73,16 @@ export function InitializationProgress({ api }: { api: Api }) {
           <p>Last progress update: {new Date(progress.updated_at).toLocaleString()} · Run {progress.run_id}</p>
           {progress.status === "running" && <p>{result.availability === "stale" ? "Elapsed since start (progress stale)" : "Elapsed"}: {Math.floor(elapsed / 60)} min</p>}
           {progress.status === "paused_quality_review" ? (
-            <p role="status">Paused for quality review. Checking for a safe resume. Finish estimate unavailable.</p>
+            <p role="status">Initialization is paused. Refresh to check its status. Finish estimate unavailable.</p>
           ) : progress.status !== "running" ? (
-            <p>Initialization finished. Semantic review and publication are separate steps.</p>
+            <p>Initialization finished. Generated drafts can be published as initial summaries.</p>
           ) : result.availability === "stale" ? (
             <p>Estimate unavailable until progress updates.</p>
           ) : remainingSeconds === null ? (
             <p>Estimating finish after 6 products have been processed.</p>
           ) : (
             <>
-              <p>Approx. {remainingMinutes} min remaining to finish initialization. Excludes semantic review and publication.</p>
+              <p>Approx. {remainingMinutes} min remaining to finish initialization. Excludes publication.</p>
               <p>Estimated local finish: {new Date(now + remainingSeconds * 1000).toLocaleString()}</p>
             </>
           )}

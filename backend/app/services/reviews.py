@@ -61,6 +61,14 @@ class ReviewService:
         self.submission_limit=submission_limit
         self.summaries=summaries
 
+    def review_batches(self, product_id: str, principal: Principal) -> dict:
+        if principal.role != 'pm': raise ServiceError('forbidden',403)
+        if self.repository.product(product_id) is None: raise ServiceError('product_not_found',404)
+        rows=self.repository.available_batches(product_id)
+        if len(rows)>100: raise ServiceError('too_many_review_batches',503)
+        return {'items':[{'id':row['_id'],'label':row['label'],
+                          'review_count':row['product_counts'][product_id]} for row in rows]}
+
     def submit(self, product_id: str, principal: Principal, key: str, payload: ReviewInput) -> dict:
         if principal.role!='reviewer': raise ServiceError('forbidden',403)
         if not key or len(key)>200 or not key.strip(): raise ServiceError('invalid_idempotency_key',422)
@@ -100,6 +108,8 @@ class ReviewService:
         if result['status'] == 'untracked':
             return {'status':'saved','version':None}
         state = self.summaries.current(row['parent_asin']).status
+        if state == 'uninitialized':
+            return {'status':'needs_initial_summary','version':None}
         return {'status':state if state in {'queued','updating','failed'} else 'waiting','version':None}
 
     def status(self, review_id, principal):

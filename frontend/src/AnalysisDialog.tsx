@@ -30,25 +30,9 @@ export function AnalysisDialog({
     setError("");
     async function discover() {
       try {
-        const ids = new Set<string>();
-        let cursor: string | undefined;
-        const seen = new Set<string>();
-        do {
-          const page = await api.reviews(
-            product.id,
-            "amazon_2023",
-            undefined,
-            cursor,
-          );
-          if (cancelled) return;
-          page.items.forEach((r) => {
-            if (r.batch_id && !/(^|:)C$/.test(r.batch_id)) ids.add(r.batch_id);
-          });
-          cursor = page.next_cursor || undefined;
-          if (cursor && seen.has(cursor)) throw Error("Repeated cursor");
-          if (cursor) seen.add(cursor);
-        } while (cursor);
-        const list = [...ids].sort();
+        const response = await api.reviewBatches(product.id);
+        if (cancelled) return;
+        const list = response.items.map((item) => item.id);
         setBatches(list);
         setBatch(list[0] || "");
       } catch (e) {

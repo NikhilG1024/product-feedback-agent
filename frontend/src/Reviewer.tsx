@@ -8,10 +8,12 @@ export function Reviewer({
   api,
   product,
   onSaved,
+  active = true,
 }: {
   api: Api;
   product: Product;
   onSaved: () => void;
+  active?: boolean;
 }) {
   const [rating, setRating] = useState(0),
     [title, setTitle] = useState(""),
@@ -20,10 +22,14 @@ export function Reviewer({
     [rejected, setRejected] = useState(false),
     [error, setError] = useState(""),
     [result, setResult] = useState<Submission | null>(null),
-    [statusError, setStatusError] = useState("");
+    [statusError, setStatusError] = useState(""),
+    [watchRetry, setWatchRetry] = useState(0);
   const attempt = useRef<{ key: string; body: ReviewInput } | null>(null);
   const alive = useRef(true);
   const success = useRef<HTMLHeadingElement>(null);
+  const formHeading = useRef<HTMLHeadingElement>(null);
+  const returnToForm = useRef(false);
+  const resultEpoch = useRef(0);
   useEffect(() => {
     alive.current = true;
     return () => {
@@ -33,45 +39,47 @@ export function Reviewer({
   useEffect(() => {
     if (result) success.current?.focus();
   }, [result?.id]);
+  useEffect(() => {
+    if (!result && returnToForm.current) {
+      formHeading.current?.focus();
+      returnToForm.current = false;
+    }
+  }, [result]);
   async function refresh() {
     if (!result) return;
+    const epoch = resultEpoch.current;
     try {
       const next = await api.status(result.id);
-      if (alive.current) {
+      if (alive.current && epoch === resultEpoch.current) {
         setResult(next);
         setStatusError("");
+        setWatchRetry((n) => n + 1);
       }
     } catch (e) {
-      if (alive.current) setStatusError(errorMessage(e));
+      if (alive.current && epoch === resultEpoch.current) setStatusError(errorMessage(e));
     }
   }
+  function writeAnother() {
+    resultEpoch.current++;
+    attempt.current = null;
+    returnToForm.current = true;
+    setRating(0); setTitle(""); setText(""); setResult(null);
+    setError(""); setStatusError(""); setRejected(false);
+  }
   useEffect(() => {
-    if (
-      !result ||
-      api.demo ||
-      (isFinished(result.processing?.status) && summaryFinished(result.summary?.status)) ||
-      statusError
-    )
-      return;
-    let cancelled = false;
-    let timer: ReturnType<typeof setTimeout>;
-    async function poll() {
-      try {
-        const next = await api.status(result!.id);
-        if (cancelled) return;
-        setResult(next);
-        if (!isFinished(next.processing?.status) || !summaryFinished(next.summary?.status))
-          timer = setTimeout(poll, 4000);
-      } catch (e) {
-        if (!cancelled) setStatusError(errorMessage(e));
-      }
-    }
-    timer = setTimeout(poll, 1000);
-    return () => {
-      cancelled = true;
-      clearTimeout(timer);
-    };
-  }, [result?.id, result?.processing?.status, result?.summary?.status, api, statusError]);
+    if (!result || !active || api.demo || (isFinished(result.processing?.status) && summaryFinished(result.summary?.status))) return;
+    if (!api.watchSubmission) { setStatusError("Live status updates are unavailable."); return; }
+    const controller = new AbortController();
+    const epoch = resultEpoch.current;
+    void api.watchSubmission(result.id, (next) => {
+      if (controller.signal.aborted || epoch !== resultEpoch.current) return;
+      setResult(next); setStatusError("");
+      if (isFinished(next.processing?.status) && summaryFinished(next.summary?.status)) controller.abort();
+    }, controller.signal).catch(() => {
+      if (!controller.signal.aborted && epoch === resultEpoch.current) setStatusError("Live status updates are unavailable. Check progress to reconnect.");
+    });
+    return () => { controller.abort(); };
+  }, [result?.id, active, api, watchRetry]);
   async function submit() {
     if (busy) return;
     if (!attempt.current) {
@@ -112,7 +120,7 @@ export function Reviewer({
   return (
     <section className="reviewer">
       <div className="heading">
-        <h1>How was your experience?</h1>
+        <h1 ref={formHeading} tabIndex={-1}>How was your experience?</h1>
         <p>A few details can help make the product better.</p>
       </div>
       <div className="review-card">
@@ -145,6 +153,7 @@ export function Reviewer({
               <span>Product summary</span>
               <span className={`pill ${result.summary?.status === "failed" ? "failed" : result.summary?.status === "included" ? "ready" : ""}`}>{result.summary?.status === "included" && result.summary.version
                 ? `Included in version ${result.summary.version}`
+                : result.summary?.status === "needs_initial_summary" ? "Initial summary not published yet"
                 : result.summary?.status === "waiting" ? "Summary update pending"
                 : result.summary?.status === "queued" ? "Update queued"
                 : result.summary?.status === "updating" ? "Updating"
@@ -167,6 +176,9 @@ export function Reviewer({
             )}
             <button className="button" onClick={refresh}>
               Check progress
+            </button>
+            <button className="button" onClick={writeAnother}>
+              Write another review
             </button>
           </>
         ) : (

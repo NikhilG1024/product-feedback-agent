@@ -8,8 +8,8 @@ The earlier run-based analysis remains available under **Legacy analysis**.
 
 The project contains a React/TypeScript frontend, a FastAPI backend, a separate
 background workers, MongoDB storage, Hindsight memory, and separate model adapters.
-Incremental summaries use the exact OpenRouter Nemotron 3 Ultra free variant;
-legacy analysis uses Groq. A saved review, published summary, and Hindsight sync
+Incremental summaries use the authenticated local Qwen llama-server through an
+ngrok tunnel; legacy analysis retains its separate Groq client. A saved review, published summary, and Hindsight sync
 are separate states.
 
 ## Prerequisites
@@ -19,9 +19,9 @@ are separate states.
 - MongoDB connection with collection/index management permissions and visibility
   into all user-database statistics. The application enforces a 400,000,000-byte
   ceiling for `dataSize + indexSize` across user databases.
-- A server-side `OPENROUTER_API_KEY` for incremental summaries. The runtime pins
-  `nvidia/nemotron-3-ultra-550b-a55b:free` with a zero-price provider ceiling.
-- A server-side Groq key for optional legacy analysis.
+- A protected local Qwen llama-server and ngrok tunnel for incremental summaries.
+  Configure `LOCAL_MODEL_API_URL`, `LOCAL_MODEL_API_KEY`, and `LOCAL_MODEL_NAME`
+  server-side. Groq remains available only as an explicit summary-provider setting.
 - Hindsight API URL and key for independent summary-version memory sync and
   legacy memory mode.
 
@@ -56,7 +56,10 @@ Edit `.env` locally and fill these settings:
 | `MONGODB_URI` | Your MongoDB connection URI |
 | `MONGODB_DATABASE` | Target database name, e.g. `product_feedback` |
 | `GROQ_API_KEY` | Model credential, used only by the backend |
-| `OPENROUTER_API_KEY` | Server-only incremental summary credential for Nemotron 3 Ultra free |
+| `SUMMARY_LLM_PROVIDER` | `local` by default; `groq` only when explicitly selected, with no fallback |
+| `LOCAL_MODEL_API_URL` | Local model API URL, e.g. `https://YOUR_NGROK_DOMAIN.ngrok-free.app/v1` |
+| `LOCAL_MODEL_API_KEY` | Bearer key for the authenticated llama-server |
+| `LOCAL_MODEL_NAME` | Pinned alias `qwen3-4b-instruct-2507-local` |
 | `HINDSIGHT_API_URL` | Your Hindsight service endpoint |
 | `HINDSIGHT_API_KEY` | Hindsight service credential |
 | `DEMO_PM_TOKEN` | Demo PM access token for analysis, questions and decisions |
@@ -65,14 +68,36 @@ Edit `.env` locally and fill these settings:
 Generate each demo token separately with `openssl rand -hex 32`. These tokens are
 simple shared demo identities, not production user accounts. Enter a demo token
 in the frontend's **Connect API** dialog; never enter a provider key there.
-`LLM_API_KEY`, if populated, overrides `GROQ_API_KEY`, so leave it blank unless you
-intend that override. Keep the Groq account on its Free plan; the application
+`LLM_API_KEY`, if populated, overrides `GROQ_API_KEY` for legacy analysis only.
+Incremental summaries use the local model key by default; explicit Groq summary
+selection uses `GROQ_API_KEY`. Keep the Groq account on its Free plan; the application
 cannot enforce account billing settings or guarantee available quota.
 
 The backend does **not** automatically read `.env`. The `dotenv run` commands below
 load it for each process. Restart the API and worker after changing configuration.
 Keep secrets out of Git and all `VITE_` variables; frontend environment variables
 are not a safe place for credentials.
+
+To start the local summary model and its ngrok tunnel with one command, set
+`LOCAL_MODEL_FILE` in the private `.env` to the absolute Qwen GGUF path. Put the
+llama-server Bearer key in `../../work/runtime/local-model-api-key` with mode `0600`,
+or set `LOCAL_MODEL_API_KEY_FILE` in `.env` to another private key-file path.
+Install `llama-server` and `ngrok`, and authenticate ngrok in your account first.
+Then run from the repository root:
+
+```sh
+./scripts/start-local-model
+```
+
+The command verifies the pinned model on `127.0.0.1:4300`, starts or reuses a
+matching ngrok tunnel to that port, checks the public endpoint with the Bearer
+key, and updates only the local summary-provider settings in `.env`. It never
+tunnels the backend. Leave it running; Ctrl-C stops only processes this command
+started. Existing model or tunnel processes are reused and left alone. Run
+`./scripts/start-local-model --check` to verify the existing setup without
+starting processes or changing `.env`. For a reserved ngrok hostname, set
+`LOCAL_MODEL_NGROK_DOMAIN` in `.env`; otherwise ngrok assigns one. Restart the
+backend API and summary worker if the command reports that `.env` changed.
 
 ## 3. Prepare MongoDB
 
@@ -109,11 +134,21 @@ cd ..
 ```
 
 V3 adds summary state, immutable versions, and an input membership ledger. It does
-not reimport or rewrite raw reviews. An uninitialized product returns an explicit
-empty summary until a locally generated draft passes citation and semantic review
-and is published. The local initial artifact path uses up to 20 eligible historical
-reviews per product and excludes held-out Batch C; retain its sample manifest and
-review record outside Git.
+not reimport or rewrite raw reviews. Existing generated drafts are accepted as the
+initial published summaries; a separate semantic validation step is not required.
+Acceptance records do not claim that a draft was independently validated. New
+reviews update these published starting summaries. After importing drafts, run:
+
+```sh
+cd backend
+.venv/bin/python -m dotenv -f ../.env run -- .venv/bin/python -m app.migrations.v4 --apply
+.venv/bin/python -m dotenv -f ../.env run -- .venv/bin/python -m app.summaries.publish_drafts --apply --accept-drafts
+cd ..
+```
+
+The publication command is idempotent and leaves already-published products
+unchanged. Initial samples contain up to 20 eligible historical reviews; retain
+their manifests outside Git.
 
 ## 4. Start four processes
 
@@ -123,7 +158,7 @@ Run each block in a separate terminal, starting at the repository root.
 
 ```sh
 cd backend
-.venv/bin/python -m dotenv -f ../.env run -- .venv/bin/uvicorn app.main:configured_app --factory --host 127.0.0.1 --port 8000
+.venv/bin/python -m dotenv -f ../.env run -- .venv/bin/uvicorn app.main:configured_app --factory --host 127.0.0.1 --port 8000 --timeout-graceful-shutdown 5
 ```
 
 **Terminal 2 — background worker**

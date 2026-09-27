@@ -5,6 +5,7 @@ export interface Product {
   title: string;
   product_type: string | null;
 }
+export interface ReviewBatch { id: string; label: string; review_count: number }
 export type InitializationProductStatus = "queued" | "generating" | "citation_checks_passed" | "reused" | "needs_review";
 export interface InitializationProgressResponse {
   availability: "available" | "stale" | "unavailable";
@@ -44,7 +45,7 @@ export interface Submission {
   summary?: ReviewerSummaryStatus | null;
 }
 export interface ReviewerSummaryStatus {
-  status: "saved" | "waiting" | "queued" | "updating" | "included" | "failed";
+  status: "saved" | "needs_initial_summary" | "waiting" | "queued" | "updating" | "included" | "failed";
   version: number | null;
 }
 export interface ReviewInput {
@@ -138,6 +139,9 @@ export interface Decision {
   processing: Processing | null;
 }
 export interface Api {
+  watchProduct?(product: string, onEvent: (event: { type: "summary"; view: SummaryView } | { type: "reviews_changed"; revision: string }) => void, signal: AbortSignal): Promise<void>;
+  watchSubmission?(id: string, onSubmission: (submission: Submission) => void, signal: AbortSignal): Promise<void>;
+  watchAnalysis?(id: string, onRun: (run: Run) => void, signal: AbortSignal): Promise<void>;
   summaryProgress(offset?: number): Promise<InitializationProgressResponse>;
   summary(product: string): Promise<SummaryView>;
   summaryHistory(product: string, cursor?: string): Promise<Page<SummaryVersion>>;
@@ -148,6 +152,7 @@ export interface Api {
   question(product: string, run: string, question: string): Promise<Answer>;
   readonly demo: boolean;
   products(cursor?: string): Promise<Page<Product>>;
+  reviewBatches(product: string): Promise<{ items: ReviewBatch[] }>;
   reviews(
     product: string,
     source?: Source,
@@ -189,7 +194,7 @@ export interface SummaryVersion {
   guidance_references: string[];
   created_at: string;
   published_at: string | null;
-  semantic_review?: { status: "pending" | "approved" | "rejected" };
+  semantic_review?: { status: "pending" | "approved" | "accepted" | "rejected" };
 }
 export interface SummaryView {
   product_id: string;

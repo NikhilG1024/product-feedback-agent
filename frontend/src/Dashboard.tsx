@@ -12,10 +12,12 @@ export function Dashboard({
   api,
   product,
   reviewVersion,
+  active = true,
 }: {
   api: Api;
   product: Product;
   reviewVersion: number;
+  active?: boolean;
 }) {
   const [run, setRun] = useState<Run | null>(null),
     [analysisOpen, setAnalysisOpen] = useState(false),
@@ -49,26 +51,25 @@ export function Dashboard({
     setError("");
   }
   useEffect(() => {
-    if (!run || isFinished(run.status)) return;
-    let cancelled = false;
-    let timer: ReturnType<typeof setTimeout>;
+    if (!run || isFinished(run.status) || !active) return;
+    const controller = new AbortController();
     const id = run.id;
-    async function poll() {
-      try {
-        const next = await api.run(id);
-        if (cancelled || currentId.current !== id) return;
-        accept(next);
-        if (!isFinished(next.status)) timer = setTimeout(poll, 2500);
-      } catch (e) {
-        if (!cancelled) setError(errorMessage(e));
-      }
+    if (api.demo) {
+      const timer = setTimeout(() => { void api.run(id).then((next) => {
+        if (!controller.signal.aborted && currentId.current === id) accept(next);
+      }).catch((e) => { if (!controller.signal.aborted) setError(errorMessage(e)); }); }, 900);
+      return () => { controller.abort(); clearTimeout(timer); };
     }
-    timer = setTimeout(poll, api.demo ? 900 : 2500);
-    return () => {
-      cancelled = true;
-      clearTimeout(timer);
-    };
-  }, [run?.id, pollVersion, api]);
+    if (!api.watchAnalysis) { setError("Live analysis updates are unavailable."); return; }
+    void api.watchAnalysis(id, (next) => {
+      if (controller.signal.aborted || currentId.current !== id) return;
+      accept(next);
+      if (isFinished(next.status)) controller.abort();
+    }, controller.signal).catch(() => {
+      if (!controller.signal.aborted) setError("Live analysis updates are unavailable. Retry to reconnect.");
+    });
+    return () => { controller.abort(); };
+  }, [run?.id, pollVersion, api, active]);
   useEffect(() => {
     if (run?.status === "completed" && reviewVersion > 0)
       setRun((r) => (r ? { ...r, stale: true } : r));

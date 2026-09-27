@@ -21,6 +21,8 @@ it("routes reviewer writes/status to reviewer auth and all other API calls to PM
   const state = localAuthState("serve", "http://127.0.0.1:8000", credentials);
   expect(proxyCredentialFor(state, "127.0.0.1", "POST", "/api/v1/products/P/reviews")).toBe("reviewer-secret");
   expect(proxyCredentialFor(state, "::1", "GET", "/api/v1/reviews/r1/status")).toBe("reviewer-secret");
+  expect(proxyCredentialFor(state, "::1", "GET", "/api/v1/reviews/r1/events")).toBe("reviewer-secret");
+  expect(proxyCredentialFor(state, "::1", "GET", "/api/v1/products/P/events")).toBe("pm-secret");
   expect(proxyCredentialFor(state, "127.0.0.1", "GET", "/api/v1/products/P/summary")).toBe("pm-secret");
   expect(proxyCredentialFor(state, "127.0.0.1", "PATCH", "/api/v1/products/P/summary/settings")).toBe("pm-secret");
   expect(proxyCredentialFor(state, "192.0.2.1", "POST", "/api/v1/products/P/reviews")).toBeNull();
@@ -39,9 +41,11 @@ it("opens the live workspace without a token prompt when local auth is ready", a
     const url = String(input);
     if (url === "/__local_demo_auth") return new Response(JSON.stringify({ enabled: true }), { status: 200 });
     if (url.startsWith("/api/v1/products?")) return new Response(JSON.stringify({ items: [{ id: "P", title: "Product", product_type: null }], next_cursor: null }), { status: 200 });
-    return new Response(JSON.stringify({ product_id: "P", current: null, last_updated_at: null,
+    if (url.endsWith("/events")) return new Response("event: summary\ndata: " + JSON.stringify({ product_id: "P", current: null, last_updated_at: null,
       update_threshold: 1, pending_review_count: 0, status: "uninitialized", error_code: null,
-      memory_status: "unknown" }), { status: 200 });
+      memory_status: "unknown" }) + "\n\nevent: reviews_changed\ndata: {\"revision\":\"none\"}\n\n",
+      { status: 200, headers: { "Content-Type": "text/event-stream" } });
+    return new Response(JSON.stringify({ items: [], next_cursor: null }), { status: 200 });
   });
   render(<App />);
   expect(await screen.findByText(/CONNECTED · Live workspace data/)).toBeInTheDocument();

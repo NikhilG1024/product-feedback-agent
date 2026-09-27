@@ -39,3 +39,4 @@ data/processed/
 .superpowers/
 work/
 *.egg-info/
+.vercel/

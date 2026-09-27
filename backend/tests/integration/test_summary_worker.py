@@ -116,6 +116,16 @@ def test_review_acknowledgement_threshold_and_inclusion(setup):
     assert ("summary-P", "summary:P:v2") in memory.calls
 
 
+def test_saved_review_without_published_initial_reports_initialization_needed(setup):
+    database, repo = setup
+    reviews = ReviewService(database, summaries=repo)
+    principal = Principal(user_id="reviewer", role="reviewer")
+    saved = reviews.submit("P", principal, "initial-needed",
+        ReviewInput(title="New feedback", text="The hinge broke", rating=2))
+    assert saved["summary"] == {"status": "needs_initial_summary", "version": None}
+    assert reviews.status(saved["id"], principal)["summary"] == saved["summary"]
+
+
 def test_crash_marker_reconciles_without_importing_history(setup):
     database, repo = setup
     publish_empty_initial(repo)

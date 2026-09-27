@@ -248,14 +248,16 @@ function Workspace({
                     api={api}
                     product={selected}
                     reviewVersion={reviewVersion}
+                    active={view === "pm"}
                   />
                 </div>
-                {view === "legacy" && <Dashboard api={api} product={selected} reviewVersion={reviewVersion} />}
+                {view === "legacy" && <Dashboard api={api} product={selected} reviewVersion={reviewVersion} active />}
                 <div hidden={view !== "reviewer"}>
                   <Reviewer
                     api={api}
                     product={selected}
                     onSaved={() => setReviewVersion((n) => n + 1)}
+                    active={view === "reviewer"}
                   />
                 </div>
               </div>

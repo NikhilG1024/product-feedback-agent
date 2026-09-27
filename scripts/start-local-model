@@ -1,0 +1,330 @@
+#!/usr/bin/env python3
+"""Start or reuse authenticated local Qwen and its ngrok model-only tunnel."""
+import argparse
+from hmac import compare_digest
+import json
+import os
+from pathlib import Path
+import shlex
+import shutil
+import signal
+import socket
+import subprocess
+import sys
+import tempfile
+import time
+from urllib.error import HTTPError, URLError
+from urllib.parse import urlsplit
+from urllib.request import Request, urlopen
+
+ROOT = Path(__file__).resolve().parents[1]
+ENV_FILE = ROOT / ".env"
+RUNTIME = ROOT.parents[1] / "work" / "runtime"
+ALIAS = "qwen3-4b-instruct-2507-local"
+PORT = 4300
+LOCAL_BASE = f"http://127.0.0.1:{PORT}/v1"
+MODEL_ARGS = ["--host", "127.0.0.1", "--port", str(PORT), "--alias", ALIAS,
+              "--parallel", "6", "--ctx-size", "49152", "--kv-unified-per-slot", "8192",
+              "--cache-ram", "0", "--ubatch-size", "256", "--cont-batching",
+              "--gpu-layers", "99", "--jinja"]
+
+
+def fail(message):
+    raise RuntimeError(message)
+
+
+def read_env(path):
+    if not path.is_file():
+        fail(f"Missing private environment file: {path}")
+    result = {}
+    for line in path.read_text().splitlines():
+        stripped = line.strip()
+        if not stripped or stripped.startswith("#") or "=" not in line:
+            continue
+        key, raw = line.split("=", 1)
+        key = key.strip()
+        if not key.isidentifier():
+            continue
+        try:
+            parts = shlex.split(raw, comments=True)
+        except ValueError:
+            fail(f"Invalid .env value for {key}")
+        result[key] = parts[0] if parts else ""
+    return result
+
+
+def config_path(value):
+    path = Path(value).expanduser()
+    return (path if path.is_absolute() else ROOT / path).resolve()
+
+
+def load_config(path):
+    env = read_env(path)
+    model_name = env.get("LOCAL_MODEL_NAME", ALIAS)
+    if model_name != ALIAS:
+        fail("LOCAL_MODEL_NAME must be the pinned local Qwen alias")
+    model_text = env.get("LOCAL_MODEL_FILE") or os.environ.get("LOCAL_MODEL_FILE")
+    if not model_text:
+        fail("Set LOCAL_MODEL_FILE in the private .env to the Qwen GGUF path")
+    model_file = config_path(model_text)
+    if not model_file.is_file():
+        fail(f"Model file does not exist: {model_file}")
+    key_file = config_path(env.get("LOCAL_MODEL_API_KEY_FILE") or
+        str(RUNTIME / "local-model-api-key"))
+    if not key_file.is_file() or key_file.stat().st_mode & 0o077:
+        fail("Local model API key file must exist with owner-only permissions")
+    key = key_file.read_text().strip()
+    if not key or any(char.isspace() for char in key):
+        fail("Local model API key file is empty or malformed")
+    configured_key = env.get("LOCAL_MODEL_API_KEY")
+    if configured_key and not compare_digest(configured_key, key):
+        fail("LOCAL_MODEL_API_KEY differs from the existing llama-server key file")
+    domain = env.get("LOCAL_MODEL_NGROK_DOMAIN") or env.get("NGROK_DOMAIN") or ""
+    if domain:
+        host = urlsplit("https://" + domain).hostname
+        if (host != domain or not (domain.endswith(".ngrok-free.app") or
+                                    domain.endswith(".ngrok.app"))):
+            fail("Optional ngrok domain must be a bare ngrok hostname")
+    return env, model_file, key_file, key, domain
+
+
+def processes():
+    output = subprocess.check_output(["ps", "-axo", "pid=,command="], text=True)
+    for line in output.splitlines():
+        try:
+            pid_text, command = line.strip().split(None, 1)
+            args = shlex.split(command)
+        except ValueError:
+            continue
+        if args:
+            yield int(pid_text), args
+
+
+def flag(args, name):
+    try:
+        return args[args.index(name) + 1]
+    except (ValueError, IndexError):
+        return None
+
+
+def listening(port):
+    with socket.socket() as sock:
+        sock.settimeout(0.3)
+        return sock.connect_ex(("127.0.0.1", port)) == 0
+
+
+def model_process(model_file, key_file):
+    matches = []
+    for pid, args in processes():
+        if Path(args[0]).name != "llama-server" or flag(args, "--port") != str(PORT):
+            continue
+        model_arg = flag(args, "-m") or flag(args, "--model")
+        key_arg = flag(args, "--api-key-file")
+        expected = MODEL_ARGS
+        if (not model_arg or not key_arg or config_path(model_arg) != model_file or
+                config_path(key_arg) != key_file or any(
+                    (flag(args, expected[i]) != expected[i + 1])
+                    for i in (0, 2, 4, 6, 8, 10, 12, 14, 17)) or
+                "--cont-batching" not in args or "--jinja" not in args):
+            fail(f"Port {PORT} has a different llama-server process (PID {pid}); stop it manually")
+        matches.append(pid)
+    if len(matches) > 1:
+        fail(f"Multiple llama-server processes claim port {PORT}")
+    if not matches and listening(PORT):
+        fail(f"Port {PORT} is occupied by an unknown process; refusing to replace it")
+    return matches[0] if matches else None
+
+
+def models_url(base, key):
+    request = Request(base + "/models", headers={
+        "Authorization": "Bearer " + key,
+        "ngrok-skip-browser-warning": "true",
+        "Accept": "application/json"})
+    with urlopen(request, timeout=8) as response:
+        payload = json.load(response)
+    if not any(isinstance(item, dict) and item.get("id") == ALIAS
+               for item in payload.get("data", [])):
+        fail("Authenticated model endpoint returned a different model alias")
+
+
+def wait_until(check, child, timeout, label):
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        if child is not None and child.poll() is not None:
+            fail(f"{label} exited during startup; inspect the private runtime log")
+        try:
+            value = check()
+            if value:
+                return value
+        except (HTTPError, URLError, OSError, ValueError, json.JSONDecodeError):
+            pass
+        time.sleep(1)
+    fail(f"Timed out waiting for {label}")
+
+
+def active_tunnel(domain):
+    try:
+        with urlopen("http://127.0.0.1:4040/api/tunnels", timeout=3) as response:
+            tunnels = json.load(response).get("tunnels", [])
+    except (HTTPError, URLError, OSError, ValueError, json.JSONDecodeError):
+        return None
+    found = []
+    for tunnel in tunnels:
+        public = tunnel.get("public_url", "")
+        addr = tunnel.get("config", {}).get("addr", "")
+        parsed = urlsplit(addr)
+        if parsed.port == PORT and public.startswith("https://"):
+            if domain and urlsplit(public).hostname != domain:
+                continue
+            found.append(public.rstrip("/"))
+    if len(found) > 1:
+        fail("More than one matching ngrok model tunnel is active")
+    return found[0] if found else None
+
+
+def ngrok_process():
+    matches = []
+    for pid, args in processes():
+        if Path(args[0]).name != "ngrok" or len(args) < 3 or args[1] != "http":
+            continue
+        if args[2] == str(PORT):
+            matches.append(pid)
+    if len(matches) > 1:
+        fail(f"Multiple ngrok processes target model port {PORT}")
+    return matches[0] if matches else None
+
+
+def update_private_env(path, updates):
+    original = path.read_text()
+    lines = original.splitlines(keepends=True)
+    found = set()
+    changed = False
+    for index, line in enumerate(lines):
+        key = line.partition("=")[0].strip()
+        if key in updates and not line.lstrip().startswith("#"):
+            replacement = key + "=" + shlex.quote(updates[key]) + "\n"
+            changed |= line != replacement
+            lines[index] = replacement
+            found.add(key)
+    for key, value in updates.items():
+        if key not in found:
+            lines.append(key + "=" + shlex.quote(value) + "\n")
+            changed = True
+    if not changed:
+        return False
+    fd, temp = tempfile.mkstemp(prefix=".env.local-model.", dir=path.parent)
+    try:
+        os.fchmod(fd, 0o600)
+        with os.fdopen(fd, "w") as output:
+            output.writelines(lines)
+            output.flush()
+            os.fsync(output.fileno())
+        os.replace(temp, path)
+    finally:
+        if os.path.exists(temp):
+            os.unlink(temp)
+    return True
+
+
+def launch(args, log_path):
+    log_path.parent.mkdir(parents=True, exist_ok=True)
+    fd = os.open(log_path, os.O_CREAT | os.O_WRONLY | os.O_APPEND, 0o600)
+    with os.fdopen(fd, "a") as log:
+        return subprocess.Popen(args, cwd=ROOT, stdin=subprocess.DEVNULL,
+                                stdout=log, stderr=subprocess.STDOUT,
+                                start_new_session=True)
+
+
+def stop_owned(children):
+    for child in reversed(children):
+        if child.poll() is None:
+            os.killpg(child.pid, signal.SIGTERM)
+    for child in reversed(children):
+        try:
+            child.wait(timeout=5)
+        except subprocess.TimeoutExpired:
+            os.killpg(child.pid, signal.SIGKILL)
+            child.wait(timeout=5)
+
+
+def main():
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--check", action="store_true", help="Verify existing model and tunnel without starting or changing anything")
+    args = parser.parse_args()
+    env, model_file, key_file, key, domain = load_config(ENV_FILE)
+    children = []
+    try:
+        running_model = model_process(model_file, key_file)
+        if running_model:
+            print(f"Reusing matching authenticated llama-server on port {PORT} (PID {running_model}).")
+        elif args.check:
+            fail(f"No matching llama-server is running on port {PORT}")
+        else:
+            executable = shutil.which("llama-server")
+            if not executable:
+                fail("llama-server is not installed or not on PATH")
+            child = launch([executable, "-m", str(model_file), *MODEL_ARGS,
+                            "--api-key-file", str(key_file)], RUNTIME / "local-model.log")
+            children.append(child)
+            print(f"Started authenticated llama-server on port {PORT} (PID {child.pid}).")
+        wait_until(lambda: models_url(LOCAL_BASE, key) or True,
+                   children[0] if children else None, 300, "local model")
+        print("Authenticated local model probe passed.")
+
+        public = active_tunnel(domain)
+        tunnel_pid = ngrok_process()
+        if public and tunnel_pid:
+            print(f"Reusing ngrok model tunnel (PID {tunnel_pid}).")
+        elif tunnel_pid:
+            fail("Existing ngrok process targets port 4300 but has no matching tunnel; inspect it manually")
+        elif args.check:
+            fail("No matching ngrok model tunnel is active")
+        else:
+            executable = shutil.which("ngrok")
+            if not executable:
+                fail("ngrok is not installed or not on PATH")
+            command = [executable, "http", str(PORT), "--log", "stderr", "--log-level", "warn"]
+            if domain:
+                command.extend(["--domain", domain])
+            child = launch(command, RUNTIME / "ngrok-model.log")
+            children.append(child)
+            public = wait_until(lambda: active_tunnel(domain), child, 45, "ngrok tunnel")
+            print(f"Started ngrok model tunnel (PID {child.pid}).")
+        if not public:
+            fail("Model tunnel is unavailable")
+        from urllib.parse import urlsplit
+        host = urlsplit(public).hostname or ""
+        if not (host.endswith(".ngrok-free.app") or host.endswith(".ngrok.app")):
+            fail("Tunnel URL is not an HTTPS ngrok domain")
+        base = public + "/v1"
+        wait_until(lambda: models_url(base, key) or True, None, 30, "public model endpoint")
+        print("Authenticated public model probe passed.")
+        print("Model API URL:", base)
+        if args.check:
+            print("Check complete; no processes or .env settings changed.")
+            return
+        changed = update_private_env(ENV_FILE, {
+            "SUMMARY_LLM_PROVIDER": "local", "LOCAL_MODEL_API_URL": base,
+            "LOCAL_MODEL_NAME": ALIAS, "LOCAL_MODEL_API_KEY": key})
+        if changed:
+            print("Private .env updated. Restart the backend API and summary worker to use this model URL.")
+        else:
+            print("Private .env already matches the active model URL.")
+        print("Press Ctrl-C to stop only processes started by this command.")
+        while True:
+            for child in children:
+                if child.poll() is not None:
+                    fail("A process started by this command exited; inspect its private runtime log")
+            time.sleep(2)
+    except KeyboardInterrupt:
+        print("Stopping processes started by this command.")
+    finally:
+        stop_owned(children)
+
+
+if __name__ == "__main__":
+    try:
+        main()
+    except RuntimeError as exc:
+        print("start-local-model:", exc, file=sys.stderr)
+        sys.exit(1)

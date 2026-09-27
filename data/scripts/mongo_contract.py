@@ -73,7 +73,7 @@ SUMMARY_THEME = {'bsonType':'object','required':['id','description','issue_type'
         'polarity':{'enum':['positive','negative','mixed','neutral']},
         'evidence':{'bsonType':'array','minItems':1,'maxItems':3,'items':SUMMARY_EVIDENCE}}}
 SUMMARY_SEMANTIC_REVIEW = {'bsonType':'object','required':['status'],
-    'properties':{'status':{'enum':['pending','approved','rejected']},
+    'properties':{'status':{'enum':['pending','approved','accepted','rejected']},
         'reviewer_id':S,'reviewer_type':{'enum':['human','automated']},
         'reviewed_at':D,'artifact_sha256':{'bsonType':'string','minLength':64,'maxLength':64},
         'rubric_version':S,'factual_support':{'bsonType':['bool','null']},
@@ -84,6 +84,9 @@ SUMMARY_SEMANTIC_REVIEW = {'bsonType':'object','required':['status'],
                      'rubric_version','factual_support','coverage','classification'],
          'properties':{'status':{'enum':['approved']},'factual_support':{'enum':[True]},
                        'coverage':{'enum':[True]},'classification':{'enum':[True]}}},
+        {'required':['reviewer_id','reviewer_type','reviewed_at','artifact_sha256','rubric_version'],
+         'properties':{'status':{'enum':['accepted']},'factual_support':{'bsonType':'null'},
+                       'coverage':{'bsonType':'null'},'classification':{'bsonType':'null'}}},
         {'required':['reviewer_id','reviewer_type','reviewed_at','artifact_sha256','rubric_version'],
          'properties':{'status':{'enum':['rejected']}}}]}
 V3_SCHEMAS = {

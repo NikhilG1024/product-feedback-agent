@@ -1,0 +1,24 @@
+# Keep private configuration, local runtimes and datasets out of deployments.
+.git/
+.vercel/
+.env
+.env.*
+**/.env
+**/.env.*
+.venv/
+**/.venv/
+**/__pycache__/
+**/*.pyc
+**/.pytest_cache/
+**/*.log
+.superpowers/
+work/
+frontend/
+backend/tests/
+data/raw/
+data/processed/
+data/samples/
+content/
+evaluation/
+docs/
+scripts/

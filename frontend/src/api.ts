@@ -17,6 +17,7 @@ import type {
   SummaryView,
   SummaryVersion,
 } from "./types";
+import { watchSSE } from "./sse";
 const messages: Record<string, string> = {
   historical_batch_required: "Choose a review group for past Amazon reviews.",
   cutoff_after_batch_end:
@@ -81,6 +82,30 @@ export const errorMessage = (error: unknown) =>
 export class HttpApi implements Api {
   readonly demo = false;
   readonly localAutoAuth: boolean;
+  private streamHeaders(): Record<string, string> { return this.localAutoAuth ? {} : { Authorization: `Bearer ${this.token}` }; }
+  watchProduct(product: string, onEvent: (event: { type: "summary"; view: SummaryView } | { type: "reviews_changed"; revision: string }) => void, signal: AbortSignal) {
+    return watchSSE(`/api/v1/products/${encodeURIComponent(product)}/events`, this.streamHeaders(), ({ event, data }) => {
+      const value: unknown = JSON.parse(data);
+      if (event === "summary" && value && typeof value === "object" && (value as SummaryView).product_id === product)
+        onEvent({ type: "summary", view: value as SummaryView });
+      if (event === "reviews_changed" && value && typeof value === "object" && typeof (value as { revision?: unknown }).revision === "string")
+        onEvent({ type: "reviews_changed", revision: (value as { revision: string }).revision });
+    }, signal, this.fetcher);
+  }
+  watchSubmission(id: string, onSubmission: (submission: Submission) => void, signal: AbortSignal) {
+    return watchSSE(`/api/v1/reviews/${encodeURIComponent(id)}/events`, this.streamHeaders(), ({ event, data }) => {
+      if (event !== "submission") return;
+      const value: unknown = JSON.parse(data);
+      if (value && typeof value === "object" && (value as Submission).id === id) onSubmission(value as Submission);
+    }, signal, this.fetcher);
+  }
+  watchAnalysis(id: string, onRun: (run: Run) => void, signal: AbortSignal) {
+    return watchSSE(`/api/v1/analysis-runs/${encodeURIComponent(id)}/events`, this.streamHeaders(), ({ event, data }) => {
+      if (event !== "analysis") return;
+      const value: unknown = JSON.parse(data);
+      if (value && typeof value === "object" && (value as Run).id === id) onRun(value as Run);
+    }, signal, this.fetcher);
+  }
   summary(product: string) {
     return this.request<SummaryView>(`/products/${encodeURIComponent(product)}/summary`);
   }
@@ -162,6 +187,9 @@ export class HttpApi implements Api {
     const q = new URLSearchParams({ limit: "30" });
     if (cursor) q.set("cursor", cursor);
     return this.request<Page<Product>>("/products?" + q);
+  }
+  reviewBatches(product: string) {
+    return this.request<{ items: import("./types").ReviewBatch[] }>(`/products/${encodeURIComponent(product)}/review-batches`);
   }
   reviews(product: string, source?: Source, batch?: string, cursor?: string, options?: ReviewListOptions) {
     const q = new URLSearchParams({ limit: String(options?.limit ?? 100) });

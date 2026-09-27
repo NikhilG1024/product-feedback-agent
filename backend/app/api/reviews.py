@@ -1,5 +1,6 @@
 """Authenticated reviewer routes with explicit public response contracts."""
 from datetime import datetime
+from typing import Literal
 from fastapi import APIRouter, Depends, Header, Query, Request
 from pydantic import BaseModel
 from app.api.auth import require_principal
@@ -16,7 +17,7 @@ class ProcessingResponse(BaseModel):
     error_code: str | None = None
 
 class SummaryStatusResponse(BaseModel):
-    status: str
+    status: Literal['saved','needs_initial_summary','waiting','queued','updating','included','failed']
     version: int | None = None
 
 class SubmissionResponse(BaseModel):
@@ -57,6 +58,14 @@ class ReviewPage(BaseModel):
     items: list[ReviewResponse]
     next_cursor: str | None
 
+class ReviewBatchResponse(BaseModel):
+    id: str
+    label: str
+    review_count: int
+
+class ReviewBatchList(BaseModel):
+    items: list[ReviewBatchResponse]
+
 
 def service(request: Request):
     result=getattr(request.app.state.services,'reviews',None)
@@ -78,3 +87,7 @@ def list_reviews(product_id: str, source: str | None=None, batch_id: str | None=
                  principal: Principal=Depends(require_principal), reviews=Depends(service)):
     return reviews.list(product_id,principal,source,batch_id,cursor,limit,
                         sentiment=sentiment,rating=rating,sort=sort)
+
+@router.get('/products/{product_id}/review-batches',response_model=ReviewBatchList)
+def review_batches(product_id: str, principal: Principal=Depends(require_principal), reviews=Depends(service)):
+    return reviews.review_batches(product_id,principal)

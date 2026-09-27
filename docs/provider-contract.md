@@ -1,38 +1,39 @@
 # Provider contracts
 
-## Incremental summary provider: OpenRouter Nemotron 3 Ultra Free
+## Incremental summary provider: authenticated local Qwen
 
-Incremental product summaries use the exact model
-`nvidia/nemotron-3-ultra-550b-a55b:free` through
-`https://openrouter.ai/api/v1/chat/completions`, authenticated by the server-only
-`OPENROUTER_API_KEY`. The adapter rejects any other model or endpoint. Its request
-also sets `provider.max_price` to zero for prompt and completion tokens, with no
-alternate model, paid route, or Groq fallback. Legacy analysis still uses the
-Groq configuration described below.
+Incremental summaries default to the pinned local llama-server alias
+`qwen3-4b-instruct-2507-local`. The server-only `LOCAL_MODEL_API_URL` points
+to `https://YOUR_NGROK_DOMAIN.ngrok-free.app/v1` when the ngrok model tunnel is active;
+`http://127.0.0.1:4300/v1` is allowed for local development. Only the model
+API is tunneled. `LOCAL_MODEL_API_KEY` supplies the llama-server Bearer token
+and never reaches the browser. The adapter sends
+`ngrok-skip-browser-warning: true` for ngrok free domains. Remote URLs must
+use an HTTPS ngrok domain and have no embedded credentials, query, or fragment.
 
-The [official model page](https://openrouter.ai/nvidia/nemotron-3-ultra-550b-a55b:free)
-lists this variant as free and states that it does not support `response_format`.
-The prompt requests JSON; the adapter validates the complete response against the
-local `GeneratedSummary` schema and rejects malformed, incomplete, or oversized
-output. The app separately validates exact evidence and keeps coverage and
-publication metadata outside model output. Requests use a 64 KiB serialized
-UTF-8 body cap and a 64,000-byte prompt cap. Oversized input fails explicitly;
-review text is never silently shortened. The adapter disables reasoning in the
-request to keep routine updates within a bounded latency budget.
+The request supplies the strict compact summary JSON schema to llama-server as
+`response_format: {"type":"json_object","schema":...}`, matching the
+[llama.cpp grammar format](https://github.com/ggml-org/llama.cpp/blob/master/grammars/README.md)
+and the prior local initialization client. The schema includes the 900-character
+narrative limit. Temperature is zero, output is bounded to 6,144 tokens, and
+serialized prompt bytes are capped at 32 KiB. The local model returns only themes grounded in the new review batch. The generator
+merges those themes into the immutable published parent in code, retaining old
+theme IDs, evidence, contradictions, and opposite-polarity reports. New quotes
+are checked as exact source substrings and every new review must be cited before
+the merge. Three fresh quotes that fill a theme are split into a stable new
+theme so an old representative quote is not discarded. The model rewrites a
+compact narrative but does not rewrite prior theme provenance. A length finish reason fails as `model_output_truncated`; malformed
+JSON or schema violations fail as `model_invalid_output`. Cached GETs make no
+model call.
 
-[OpenRouter's limits documentation](https://openrouter.ai/docs/api_reference/limits)
-describes free-model request caps and 429 responses; account-specific remaining
-quota is available through `GET /api/v1/key`. A 429 is surfaced as a sanitized
-retryable `model_rate_limited` failure. Missing credentials fail before networking.
-The free model page also states the free endpoint logs inputs and outputs under
-NVIDIA's trial terms, so submit only data appropriate for that service.
+`SUMMARY_LLM_PROVIDER=local` is the default. Explicit `groq` selection uses
+the separate pinned Groq Free summary client; it is never a fallback from a
+local failure. Legacy analysis continues to use Groq separately. The backend
+does not expose the model tunnel URL or key to the frontend.
 
-This integration has deterministic mock-transport coverage. No live model call
-or production database write is part of the automated test suite.
-
-Verified 2026-09-27. Runtime adapters are synchronous. They never fabricate analysis
-when a provider fails. `httpx==0.28.1` is the bounded HTTP client;
-`hindsight-client==0.10.1` supplies the official response schemas.
+This integration has deterministic mock-transport tests; the suite makes no
+live model call. The public ngrok tunnel requires the operator to authenticate
+ngrok and bind the configured domain before remote calls can succeed.
 
 ## Hindsight contract and SDK inspection
 

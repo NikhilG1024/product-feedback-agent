@@ -127,6 +127,8 @@ def create_app(settings: Settings, services: object | None = None, *, lifespan=N
     app.include_router(summary_progress_router)
     from app.summaries.api import router as summary_router
     app.include_router(summary_router)
+    from app.api.events import router as events_router
+    app.include_router(events_router)
     return app
 
 
@@ -148,10 +150,17 @@ def configured_app() -> FastAPI:
                           model=settings.llm_model, timeout=settings.provider_timeout_seconds) if settings.llm_api_key else None
     memory = HindsightMemory(settings.hindsight_api_url, settings.hindsight_api_key,
                              timeout=settings.provider_timeout_seconds) if settings.hindsight_api_url and settings.hindsight_api_key else None
-    from app.integrations.openrouter_summary import OpenRouterSummaryModel
-    summary_model = OpenRouterSummaryModel(settings.openrouter_api_key,
-        base_url=settings.openrouter_api_url, model=settings.openrouter_summary_model,
-        timeout=settings.summary_provider_timeout_seconds) if settings.openrouter_api_key else None
+    if settings.summary_llm_provider == "local":
+        from app.integrations.local_summary import LocalSummaryModel
+        summary_model = LocalSummaryModel(settings.local_model_api_key,
+            base_url=settings.local_model_api_url, model=settings.local_model_name,
+            timeout=settings.summary_provider_timeout_seconds) if (
+                settings.local_model_api_url and settings.local_model_api_key) else None
+    else:
+        from app.integrations.groq_summary import GroqSummaryModel
+        summary_model = GroqSummaryModel(settings.groq_api_key,
+            base_url=settings.llm_api_url, model=settings.llm_model,
+            timeout=settings.summary_provider_timeout_seconds) if settings.groq_api_key else None
     analysis = AnalysisService(database, model, memory, max_reviews=settings.max_analysis_reviews,
                                max_chunk_reviews=settings.max_chunk_reviews, max_chunk_chars=settings.max_chunk_chars,
                                max_findings=settings.max_analysis_findings, capacity=capacity)

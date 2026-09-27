@@ -49,6 +49,10 @@ class FakeProvider:
         return next(self.responses)
 
 
+class DeltaProvider(FakeProvider):
+    incremental_delta = True
+
+
 def lookup(_, ids):
     return {identifier: review(identifier, "Battery failed after an hour.") for identifier in ids}
 
@@ -88,6 +92,107 @@ def test_new_contradiction_survives_and_prior_evidence_cannot_be_removed():
         [review("new", "Battery lasts all day.")], [])
     assert {e.review_id for t in result.themes for e in t.evidence} == {"old", "new"}
     assert len(result.contradictions) == 2
+
+
+def test_local_delta_preserves_old_provenance_and_mixes_opposite_reports():
+    old_theme = theme("battery", "old", "Battery failed after an hour.")
+    old = parent([old_theme], ["Earlier owners reported short battery life."])
+    addition = theme("battery", "new", "Battery lasts all day.", "positive")
+    provider = DeltaProvider([output([addition], ["One newer owner reports all-day battery life."])])
+    result = SummaryGenerator(provider, lookup).generate(PRODUCT, old,
+        [review("new", "Battery lasts all day.")], [])
+    assert len(result.themes) == 1
+    assert result.themes[0].polarity == "mixed"
+    assert {e.review_id for e in result.themes[0].evidence} == {"old", "new"}
+    assert result.contradictions == ["Earlier owners reported short battery life.",
+                                     "One newer owner reports all-day battery life."]
+    sent = json.loads(provider.messages[0][1]["content"])
+    assert sent["previous"]["themes"][0]["id"] == "battery"
+    assert "evidence" not in sent["previous"]["themes"][0]
+    assert "unverified experiences" in provider.messages[0][0]["content"]
+    assert "New reviews supplement the previous summary" in provider.messages[0][0]["content"]
+    assert "Placeholder or content-free" in provider.messages[0][0]["content"]
+
+
+def test_local_delta_rejects_missing_new_review_and_unsupported_quote():
+    old = parent([theme("battery", "old", "Battery failed after an hour.")])
+    with pytest.raises(SummaryGenerationError, match="summary_missing_review_evidence"):
+        SummaryGenerator(DeltaProvider([output([])]), lookup).generate(PRODUCT, old,
+            [review("new", "Battery lasts all day.")], [])
+    with pytest.raises(SummaryGenerationError, match="summary_unsupported_evidence"):
+        SummaryGenerator(DeltaProvider([output([theme("new", "new", "Invented quote")])]), lookup).generate(
+            PRODUCT, old, [review("new", "Battery lasts all day.")], [])
+
+
+def test_local_guidance_delta_keeps_prior_themes_without_fresh_evidence():
+    old_theme = theme("battery", "old", "Battery failed after an hour.")
+    old = parent([old_theme])
+    result = SummaryGenerator(DeltaProvider([output([])]), lookup).generate(PRODUCT, old, [],
+        [{"id": "d1", "kind": "preference", "rationale": "Keep uncertainty."}])
+    assert result.themes[0].evidence[0].review_id == "old"
+
+
+def test_local_delta_polarity_union_and_incompatible_issue_type():
+    neutral = theme("battery", "old", "Battery failed after an hour.", "neutral")
+    old = parent([neutral])
+    new = theme("battery", "new", "Battery lasts all day.", "negative")
+    result = SummaryGenerator(DeltaProvider([output([new])]), lookup).generate(PRODUCT, old,
+        [review("new", "Battery lasts all day.")], [])
+    assert result.themes[0].polarity == "negative"
+    old.themes[0].polarity = "positive"
+    result = SummaryGenerator(DeltaProvider([output([new])]), lookup).generate(PRODUCT, old,
+        [review("new", "Battery lasts all day.")], [])
+    assert result.themes[0].polarity == "mixed"
+    changed_kind = {**new, "issue_type": "feature_request"}
+    result = SummaryGenerator(DeltaProvider([output([changed_kind])]), lookup).generate(PRODUCT, old,
+        [review("new", "Battery lasts all day.")], [])
+    assert len(result.themes) == 2
+    assert result.themes[0].issue_type == "reported_defect"
+    assert result.themes[1].id.startswith("battery-delta-")
+
+
+def test_local_delta_three_fresh_quotes_preserves_old_representative():
+    old = parent([theme("battery", "old", "Battery failed after an hour.")])
+    fresh = theme("battery", "r1", "first.", "positive")
+    fresh["evidence"] = [{"review_id": identifier, "quote": quote} for identifier, quote in
+                         [("r1", "first."), ("r2", "second."), ("r3", "third.")]]
+    result = SummaryGenerator(DeltaProvider([output([fresh])]), lookup).generate(PRODUCT, old,
+        [review("r1", "first."), review("r2", "second."), review("r3", "third.")], [])
+    assert len(result.themes) == 2
+    assert result.themes[0].evidence[0].review_id == "old"
+    assert {e.review_id for e in result.themes[1].evidence} == {"r1", "r2", "r3"}
+
+
+def test_local_delta_mixed_old_theme_keeps_both_old_quotes_when_two_fresh_arrive():
+    mixed = theme("battery", "old1", "Battery failed after an hour.", "mixed")
+    mixed["evidence"].append({"review_id": "old2", "quote": "Battery failed after an hour."})
+    old = parent([mixed])
+    fresh = theme("battery", "r1", "first.", "positive")
+    fresh["evidence"].append({"review_id": "r2", "quote": "second."})
+    result = SummaryGenerator(DeltaProvider([output([fresh])]), lookup).generate(PRODUCT, old,
+        [review("r1", "first."), review("r2", "second.")], [])
+    assert {e.review_id for e in result.themes[0].evidence} == {"old1", "old2"}
+    assert result.themes[0].polarity == "mixed"
+    assert {e.review_id for e in result.themes[1].evidence} == {"r1", "r2"}
+
+
+def test_local_delta_restarts_checkpoint_from_old_provider_identity():
+    old = parent([theme("battery", "old", "Battery failed after an hour.")])
+    complete = output([theme("battery", "old", "Battery failed after an hour."),
+                       theme("new", "new", "Battery lasts all day.", "positive")])
+    saved = []
+    SummaryGenerator(FakeProvider([complete]), lookup, save_checkpoint=saved.append).generate(
+        PRODUCT, old, [review("new", "Battery lasts all day.")], [])
+    assert saved[0]["generation_identity"]["delta_mode"] is False
+    delta = DeltaProvider([output([theme("new", "new", "Battery lasts all day.", "positive")])])
+    result = SummaryGenerator(delta, lookup).generate(PRODUCT, old,
+        [review("new", "Battery lasts all day.")], [], checkpoint=saved[0])
+    assert len(delta.messages) == 1
+    assert {theme.id for theme in result.themes} == {"battery", "new"}
+    legacy = {key: value for key, value in saved[0].items() if key != "generation_identity"}
+    assert SummaryGenerator(DeltaProvider([output([theme("new", "new",
+        "Battery lasts all day.", "positive")])]), lookup).generate(PRODUCT, old,
+        [review("new", "Battery lasts all day.")], [], checkpoint=legacy).themes[0].id == "battery"
 
 
 def test_guidance_only_refresh_does_not_send_or_create_coverage():

@@ -12,6 +12,7 @@ from uuid import uuid4
 
 from pymongo import ReturnDocument
 from pymongo.errors import DuplicateKeyError
+from pydantic import ValidationError
 
 from app.repositories.capacity import CapacityGuard
 from app.errors import ServiceError
@@ -689,11 +690,12 @@ class SummaryRepository:
         except ValueError:
             return False
         if candidate["kind"] == "initial":
-            review = candidate.get("semantic_review", {})
-            if (review.get("status") != "approved" or
-                    review.get("artifact_sha256") != _review_digest(candidate) or
-                    not all(review.get(field) is True for field in
-                            ("factual_support", "coverage", "classification"))):
+            try:
+                review = SemanticReview.model_validate(candidate.get("semantic_review", {}))
+            except ValidationError:
+                return False
+            if (review.status not in {"approved", "accepted"} or
+                    review.artifact_sha256 != _review_digest(candidate)):
                 return False
         updated = self.states.update_one(
             {"_id": claim.product_id, "current_version": claim.parent_version,
@@ -773,7 +775,7 @@ class SummaryRepository:
         if version is None:
             draft = self.versions.find_one({"product_id": product_id, "kind": "initial",
                 "parent_version": None, "published_at": None,
-                "semantic_review.status": {"$in": ["pending", "approved"]}},
+                "semantic_review.status": {"$in": ["pending", "approved", "accepted"]}},
                 sort=[("version", -1)])
             initial_candidate = _public_version(draft) if draft else None
         pending = self._pending_count(product_id)

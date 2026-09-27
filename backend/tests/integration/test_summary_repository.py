@@ -171,6 +171,36 @@ def test_pending_initial_artifact_can_be_reviewed_then_published(repo):
     assert repo.current("P").current.semantic_review.reviewer_type == "automated"
 
 
+def test_explicitly_accepted_initial_draft_publishes_without_factual_gate_claims(repo):
+    claim = repo.claim("P", NOW, 30)
+    frozen = repo.freeze(claim, [], [])
+    draft = candidate(claim, frozen)
+    draft.semantic_review = SemanticReview()
+    version_id = repo.stage(claim, draft)
+    accepted = SemanticReview(status="accepted", reviewer_id="owner",
+        reviewer_type="human", reviewed_at=NOW, artifact_sha256=artifact_sha256(draft),
+        rubric_version="explicit-draft-acceptance-v1")
+    assert repo.apply_semantic_review("P", version_id, accepted)
+    assert repo.current("P").initial_candidate.semantic_review.status == "accepted"
+    assert repo.publish(claim, version_id, NOW)
+    public = repo.current("P").current
+    assert public.semantic_review.status == "accepted"
+    assert public.semantic_review.factual_support is None
+
+
+def test_rejected_initial_draft_cannot_publish(repo):
+    claim = repo.claim("P", NOW, 30)
+    frozen = repo.freeze(claim, [], [])
+    draft = candidate(claim, frozen)
+    draft.semantic_review = SemanticReview()
+    version_id = repo.stage(claim, draft)
+    rejected = SemanticReview(status="rejected", reviewer_id="owner",
+        reviewer_type="human", reviewed_at=NOW, artifact_sha256=artifact_sha256(draft),
+        rubric_version="explicit-draft-acceptance-v1")
+    assert repo.apply_semantic_review("P", version_id, rejected)
+    assert not repo.publish(claim, version_id, NOW)
+
+
 def test_threshold_100_drains_five_bounded_jobs_without_new_arrivals(repo):
     publish_initial(repo)
     repo.set_threshold("P", 100)

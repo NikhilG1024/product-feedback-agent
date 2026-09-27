@@ -40,7 +40,7 @@ class SummaryCoverage(Contract):
 
 
 class SemanticReview(Contract):
-    status: Literal["pending", "approved", "rejected"] = "pending"
+    status: Literal["pending", "approved", "accepted", "rejected"] = "pending"
     reviewer_id: str | None = None
     reviewer_type: Literal["human", "automated"] | None = None
     reviewed_at: datetime | None = None
@@ -59,6 +59,9 @@ class SemanticReview(Contract):
         if self.status == "approved" and any(getattr(self, name) is not True for name in
             ("factual_support", "coverage", "classification")):
             raise ValueError("Approved semantic review requires all rubric gates to pass")
+        if self.status == "accepted" and any(getattr(self, name) is not None for name in
+            ("factual_support", "coverage", "classification")):
+            raise ValueError("Accepted draft does not claim factual review gates")
         return self
 
 

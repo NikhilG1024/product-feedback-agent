@@ -4,10 +4,10 @@ FastAPI API and durable MongoDB workers for cached product summaries, reviews,
 scoped legacy analysis, PM corrections, and grounded questions. Product route IDs
 are `parent_asin` values (`products._id`).
 
-Incremental summary generation uses only OpenRouter's
-`nvidia/nemotron-3-ultra-550b-a55b:free` with a zero-price provider ceiling,
-configured by `OPENROUTER_API_KEY`. Legacy analysis uses Groq Free with
-`openai/gpt-oss-20b`; neither path falls back to another model. One authorized
+Incremental summaries use a dedicated authenticated local Qwen llama-server
+client pinned to `qwen3-4b-instruct-2507-local`. Only the model API is tunneled
+through ngrok; the backend stays local. Legacy analysis retains its separate
+Groq Free client. No provider or model fallback is automatic. One authorized
 synthetic legacy extraction succeeded on 2026-09-27,
 returning one locally validated finding and citation. This proves connectivity
 and the JSON contract, not general semantic quality or remaining account quota.
@@ -33,15 +33,16 @@ Set server environment values from the root `.env.example`; the app does not loa
 `.env` automatically. Keep the existing root secrets file private and unchanged.
 Required: `MONGODB_URI`, `MONGODB_DATABASE`, distinct `DEMO_REVIEWER_TOKEN` and
 `DEMO_PM_TOKEN`. Memory additionally needs `HINDSIGHT_API_URL` and
-`HINDSIGHT_API_KEY`. Incremental summaries require server-only `OPENROUTER_API_KEY`.
-Legacy analysis calls require server-only `GROQ_API_KEY` (or explicit,
-higher-priority `LLM_API_KEY`, which must also be a Groq credential).
+`HINDSIGHT_API_KEY`. Incremental summaries require server-only `LOCAL_MODEL_API_URL` and
+`LOCAL_MODEL_API_KEY`; `LOCAL_MODEL_NAME` is pinned to the Qwen alias. The
+default `SUMMARY_LLM_PROVIDER=local`; explicit `groq` selection uses
+`GROQ_API_KEY`. Legacy analysis uses Groq unless an explicit higher-priority
+`LLM_API_KEY` is set.
 `OPENCODE_API_KEY` and `DEEPSEEK_API_KEY` are ignored. A missing key leaves the API
 available with model operations disabled. Endpoint/model overrides are rejected
 unless exactly `https://api.groq.com/openai/v1` and `openai/gpt-oss-20b`.
-No transport retry or fallback can select another model or provider. An absent
-OpenRouter key leaves cached summary reads available but records attempted updates
-as failed for later retry.
+No transport retry or fallback can select another model or provider. An absent local model URL or key leaves cached summary reads available but
+records attempted updates as failed for later retry.
 
 Apply the additive v2 migration explicitly before serving writes. It checks known
 validators/indexes and refuses incompatible data; it does not drop collections or
@@ -55,7 +56,7 @@ these operator commands with its exported environment:
 .venv/bin/python -m app.migrations.v2
 .venv/bin/python -m app.migrations.v3 --dry-run
 .venv/bin/python -m app.migrations.v3
-.venv/bin/uvicorn app.main:configured_app --factory --host 127.0.0.1 --port 8000
+.venv/bin/uvicorn app.main:configured_app --factory --host 127.0.0.1 --port 8000 --timeout-graceful-shutdown 5
 ```
 
 Start the separate worker in a second terminal with the same environment:
@@ -73,8 +74,11 @@ server-only environment:
 
 V3 is a separate explicit migration. It adds state, immutable versions, and input
 membership without rewriting v2 raw reviews or legacy reports. The summary worker
-only updates a product after a locally prepared initial candidate has passed
-source/citation checks, semantic review, and publication. See the
+updates a product after its generated draft is accepted as the initial published
+summary. No separate semantic validation is required by the current product policy.
+Run the v4 validator migration and `app.summaries.publish_drafts --apply --accept-drafts`
+after staging initial drafts; acceptance preserves provenance without claiming
+independent factual validation. See the
 [cutover report](../docs/summary-cutover-report.md) before running this against the
 application database.
 
@@ -303,3 +307,35 @@ saved with the frozen input, and all counts, memory inputs and evidence come fro
 that sample. The frontend defaults to this demo option and labels the report;
 existing runs retain their original scope. Five long reviews can still require
 multiple model requests, and provider/memory latency can vary.
+
+## Live browser updates
+
+Authenticated SSE endpoints provide product summary snapshots and review-change
+signals at `/api/v1/products/{id}/events`, submission snapshots at
+`/api/v1/reviews/{id}/events`, and analysis snapshots at
+`/api/v1/analysis-runs/{id}/events`. Authorization matches the corresponding read
+API, including submission ownership. Each connection starts with a full snapshot
+and receives only changed data plus idle heartbeats. The server checks Mongo-backed
+state every two seconds; the browser no longer issues repeated polling requests.
+Frontend streams use fetch with a Bearer header (never a token in a URL), disconnect
+for inactive views, and reconnect with bounded backoff. Use the bounded graceful
+shutdown option above so open streams do not delay service restarts indefinitely.
+
+## Vercel API deployment
+
+The repository root `index.py`, `requirements.txt`, and `vercel.json` deploy the
+FastAPI API to Vercel. Set the MongoDB, demo bearer-token, Hindsight and provider
+variables from the private `.env` in the Vercel project's environment settings;
+never commit that file. Run `npx vercel deploy --prod` from the repository root.
+The health probes are `/health/live` and `/health/ready`.
+
+Vercel hosts the HTTP API only. Keep the local summary worker and the local
+model/ngrok launcher running against the same MongoDB database to process queued
+summary updates. Vercel functions do not run the persistent worker process.
+SSE connections close after four minutes and reconnect with a fresh snapshot.
+If the ngrok URL changes, update `LOCAL_MODEL_API_URL` in Vercel and redeploy.
+
+Connect the GitHub repository in Vercel's project Git settings with production
+branch `main` to deploy future pushes automatically. This requires a GitHub login
+connection on the Vercel account. The frontend is a separate deployment and is
+not included in this API project.

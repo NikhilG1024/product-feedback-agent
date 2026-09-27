@@ -180,6 +180,9 @@ export class DemoApi implements Api {
   async products() {
     return { items: clone(products), next_cursor: null };
   }
+  async reviewBatches(_product: string) {
+    return { items: [{ id: "demo:B", label: "B", review_count: 4 }] };
+  }
   async reviews(
     product: string,
     source?: Source,

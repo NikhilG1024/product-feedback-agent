@@ -28,7 +28,7 @@ it("labels sample telemetry as unavailable", async () => {
   expect(await screen.findByText(/Live initialization progress is unavailable in sample mode/)).toBeInTheDocument();
 });
 
-it("keeps polling during quality review pause without exposing raw reason or ETA", async () => {
+it("loads paused progress once without idle polling and supports manual refresh", async () => {
   vi.useFakeTimers();
   try {
   const api = new DemoApi();
@@ -44,15 +44,17 @@ it("keeps polling during quality review pause without exposing raw reason or ETA
     },
   });
   await act(async () => { render(<InitializationProgress api={api} />); });
-  expect(screen.getByText(/Paused for quality review/)).toBeInTheDocument();
+  expect(screen.getByText(/Initialization is paused/)).toBeInTheDocument();
   expect(screen.queryByText(/untrusted internal detail/)).not.toBeInTheDocument();
   expect(screen.queryByText(/Estimated local finish/)).not.toBeInTheDocument();
   await act(async () => { await vi.advanceTimersByTimeAsync(5000); });
+  expect(poll).toHaveBeenCalledTimes(1);
+  await act(async () => { fireEvent.click(screen.getByRole("button", {name: "Refresh progress"})); });
   expect(poll).toHaveBeenCalledTimes(2);
   } finally { vi.useRealTimers(); }
 });
 
-it("drops an old page when polling switches to a new run", async () => {
+it("drops an old page when manual refresh switches to a new run", async () => {
   vi.useFakeTimers();
   try {
     const api = new DemoApi();
@@ -77,7 +79,7 @@ it("drops an old page when polling switches to a new run", async () => {
       .mockResolvedValueOnce(response("B", "B1", null));
     await act(async () => { render(<InitializationProgress api={api} />); });
     fireEvent.click(screen.getByRole("button", { name: "Show more products" }));
-    await act(async () => { await vi.advanceTimersByTimeAsync(5000); });
+    await act(async () => { fireEvent.click(screen.getByRole("button", {name: "Refresh progress"})); });
     expect(screen.getByText(/B1 · Generating/)).toBeInTheDocument();
     await act(async () => { resolveOldPage(response("A", "A2", null)); });
     expect(request).toHaveBeenCalledTimes(3);

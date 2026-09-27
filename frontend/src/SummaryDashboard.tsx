@@ -6,8 +6,6 @@ import { SummaryHistory } from "./SummaryHistory";
 import { SummarySettings } from "./SummarySettings";
 import { ReviewFeed } from "./ReviewFeed";
 
-const SUMMARY_POLL_MS = 5000;
-
 function latestView(previous: SummaryView | null, next: SummaryView, product: string): SummaryView | null {
   if (next.product_id !== product) return previous;
   if (previous?.product_id === product && (previous.current?.version ?? 0) > (next.current?.version ?? 0)) return previous;
@@ -17,7 +15,7 @@ function latestView(previous: SummaryView | null, next: SummaryView, product: st
 function coverageLabel(v: SummaryVersion) {
   return `Based on ${v.coverage.historical_sample_count} sampled historical review${v.coverage.historical_sample_count === 1 ? "" : "s"} + ${v.coverage.new_review_count} new review${v.coverage.new_review_count === 1 ? "" : "s"}`;
 }
-export function SummaryDashboard({ api, product, reviewVersion = 0 }: { api: Api; product: Product; reviewVersion?: number }) {
+export function SummaryDashboard({ api, product, reviewVersion = 0, active = true }: { api: Api; product: Product; reviewVersion?: number; active?: boolean }) {
   const [view, setView] = useState<SummaryView | null>(null);
   const [selectedVersion, setSelectedVersion] = useState<number | null>(null);
   const [historical, setHistorical] = useState<SummaryVersion | null>(null);
@@ -27,39 +25,43 @@ export function SummaryDashboard({ api, product, reviewVersion = 0 }: { api: Api
   const [historyProduct, setHistoryProduct] = useState<string | null>(null);
   const [refreshBusy, setRefreshBusy] = useState(false);
   const [refreshError, setRefreshError] = useState("");
+  const [reviewRevision, setReviewRevision] = useState<string>();
+  const [streamRetry, setStreamRetry] = useState(0);
   const refreshAttempt = useRef<{ product: string; key: string } | null>(null);
   const requestId = useRef(0);
   useEffect(() => {
     const id = ++requestId.current;
     setView(null); setSelectedVersion(null); setHistorical(null); setHistoryProduct(null); setLoading(true); setError(""); setRefreshBusy(false); setRefreshError("");
+    setReviewRevision(undefined);
     refreshAttempt.current = null;
-    api.summary(product.id).then((next) => { if (id === requestId.current) setView((previous) => latestView(previous, next, product.id)); })
-      .catch((e) => { if (id === requestId.current) setError(errorMessage(e)); })
-      .finally(() => { if (id === requestId.current) setLoading(false); });
     return () => { requestId.current++; };
-  }, [api, product.id]);
+  }, [product.id]);
   useEffect(() => {
-    if (api.demo) return;
+    if (!active) return;
     let cancelled = false;
-    let timer: ReturnType<typeof setTimeout>;
-    async function poll() {
-      try {
-        const next = await api.summary(product.id);
-        if (!cancelled) {
-          setView((previous) => latestView(previous, next, product.id));
-          if (next.product_id === product.id) setError("");
-        }
-      } catch (e) {
-        if (!cancelled) setError(errorMessage(e));
-      } finally {
-        if (!cancelled) timer = setTimeout(poll, SUMMARY_POLL_MS);
-      }
+    const controller = new AbortController();
+    if (api.demo) {
+      api.summary(product.id).then((next) => {
+        if (!cancelled) { setView((previous) => latestView(previous, next, product.id)); setError(""); }
+      }).catch((e) => { if (!cancelled) setError(errorMessage(e)); })
+        .finally(() => { if (!cancelled) setLoading(false); });
+    } else if (api.watchProduct) {
+      void api.watchProduct(product.id, (event) => {
+        if (cancelled) return;
+        if (event.type === "summary") {
+          setView((previous) => latestView(previous, event.view, product.id));
+          setLoading(false); setError("");
+        } else setReviewRevision(event.revision);
+      }, controller.signal).catch(() => {
+        if (!cancelled) { setError("Live updates are unavailable. Check for updates or retry the connection."); setLoading(false); }
+      });
+    } else {
+      setError("Live updates are unavailable."); setLoading(false);
     }
-    timer = setTimeout(poll, SUMMARY_POLL_MS);
-    return () => { cancelled = true; clearTimeout(timer); };
-  }, [api, product.id]);
+    return () => { cancelled = true; controller.abort(); };
+  }, [api, product.id, active, streamRetry]);
   useEffect(() => {
-    if (!reviewVersion) return;
+    if (!api.demo || !reviewVersion) return;
     const id = requestId.current;
     api.summary(product.id).then((next) => { if (id === requestId.current) setView((previous) => latestView(previous, next, product.id)); })
       .catch((e) => { if (id === requestId.current) setError(errorMessage(e)); });
@@ -78,7 +80,7 @@ export function SummaryDashboard({ api, product, reviewVersion = 0 }: { api: Api
     setLoading(true); setError("");
     try { const next = await api.summary(product.id); if (id === requestId.current) setView((previous) => latestView(previous, next, product.id)); }
     catch (e) { if (id === requestId.current) setError(errorMessage(e)); }
-    finally { if (id === requestId.current) setLoading(false); }
+    finally { if (id === requestId.current) { setLoading(false); if (!api.demo) setStreamRetry((n) => n + 1); } }
   }
   async function refresh() {
     if (refreshBusy) return;
@@ -98,7 +100,7 @@ export function SummaryDashboard({ api, product, reviewVersion = 0 }: { api: Api
   const version = selectedVersion === null ? view?.current : historical;
   const candidate = !view?.current && view?.initial_candidate?.product_id === product.id &&
     view.initial_candidate.kind === "initial" && view.initial_candidate.published_at === null &&
-    (view.initial_candidate.semantic_review?.status === "pending" || view.initial_candidate.semantic_review?.status === "approved")
+    (["pending", "approved", "accepted"].includes(view.initial_candidate.semantic_review?.status ?? ""))
     ? view.initial_candidate : null;
   return <div className="summary-dashboard">
     <div className="heading"><h1>{product.title}</h1><p>Customer feedback and the evidence behind it.</p></div>
@@ -107,23 +109,23 @@ export function SummaryDashboard({ api, product, reviewVersion = 0 }: { api: Api
     {view && <>
       <div className="summary-statusbar">
         <span className={`pill ${view.status === "failed" ? "failed" : "ready"}`}>
-          {candidate ? `Initial summary ${candidate.semantic_review?.status === "approved" ? "awaiting publication" : "validation pending"}` : `Summary ${view.status.replaceAll("_", " ")}`}
+          {candidate ? "Initial summary awaiting publication" : `Summary ${view.status.replaceAll("_", " ")}`}
         </span>
         <span>{view.pending_review_count} pending new review{view.pending_review_count === 1 ? "" : "s"}</span>
         {view.current && <span>Memory sync: {view.memory_status}</span>}
       </div>
       {view.status === "failed" && <ErrorNotice message={`Summary update failed${view.error_code ? ` (${view.error_code})` : ""}. ${view.current ? "The last published version remains available." : "No summary has been published yet."}`} />}
       {!view.current && !candidate && (view.status === "uninitialized"
-        ? <section className="empty-state"><h2>No published summary yet.</h2><p>A reviewed summary is being prepared for this product. This page updates when it is published.</p></section>
+        ? <section className="empty-state"><h2>No published summary yet.</h2><p>An initial summary is being prepared for this product. This page updates when it is published.</p></section>
         : <section className="empty-state"><h2>No published summary available.</h2><p>Status: {view.status}. This page updates when a summary is published.</p></section>)}
       {candidate && <article className="published-summary candidate-summary">
-        <div className="section-heading"><h2>Generated initial summary</h2><span className="pill">{candidate.semantic_review?.status === "approved" ? "Awaiting publication" : "Validation pending"}</span></div>
+        <div className="section-heading"><h2>Generated initial summary</h2><span className="pill">Awaiting publication</span></div>
         <p className="summary-meta">Generated {new Date(candidate.created_at).toLocaleString()} · Version {candidate.version} · Not published</p>
         <p className="source-label">{coverageLabel(candidate)}</p>
         <p className="summary-text">{candidate.narrative}</p>
         {candidate.guidance_references.length > 0 && <p className="fine-print">Guidance used in this draft: {candidate.guidance_references.join(", ")}</p>}
         <p className="fine-print">New reviews will be incorporated after the initial summary is published.</p>
-        <ReviewFeed key={product.id} api={api} product={product.id} reviewVersion={reviewVersion} />
+        <ReviewFeed key={product.id} api={api} product={product.id} active={active} revision={reviewRevision} reviewVersion={api.demo ? reviewVersion : 0} />
       </article>}
       {view.current && <>
         <div className="summary-actions"><button className="button" disabled={refreshBusy || view.pending_review_count === 0} onClick={() => void refresh()}>{refreshBusy ? "Requesting…" : refreshAttempt.current ? "Retry update request" : "Update now"}</button>
@@ -139,10 +141,10 @@ export function SummaryDashboard({ api, product, reviewVersion = 0 }: { api: Api
           <p className="source-label">{coverageLabel(version)}</p>
           <p className="summary-text">{version.narrative}</p>
           {version.guidance_references.length > 0 && <p className="fine-print">Guidance used in this version: {version.guidance_references.join(", ")}</p>}
-          {selectedVersion === null && <ReviewFeed key={product.id} api={api} product={product.id} reviewVersion={reviewVersion} />}
+          {selectedVersion === null && <ReviewFeed key={product.id} api={api} product={product.id} active={active} revision={reviewRevision} reviewVersion={api.demo ? reviewVersion : 0} />}
         </article>}
       </>}
-      {!view.current && !candidate && <ReviewFeed key={product.id} api={api} product={product.id} reviewVersion={reviewVersion} />}
+      {!view.current && !candidate && <ReviewFeed key={product.id} api={api} product={product.id} active={active} revision={reviewRevision} reviewVersion={api.demo ? reviewVersion : 0} />}
       <SummarySettings api={api} product={product.id} value={view.update_threshold} onChanged={setView} />
     </>}
   </div>;

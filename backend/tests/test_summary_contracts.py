@@ -72,3 +72,15 @@ def test_rejected_semantic_review_keeps_unassessed_gates_unknown():
                        coverage=False, classification=True)
     assert SemanticReview(status="approved", **metadata, factual_support=True,
                           coverage=True, classification=True).status == "approved"
+
+
+def test_accepted_initial_draft_requires_attribution_without_factual_gate_claims():
+    metadata = {"reviewer_id": "owner", "reviewer_type": "human",
+                "reviewed_at": datetime.now(timezone.utc), "artifact_sha256": "a" * 64,
+                "rubric_version": "explicit-draft-acceptance-v1"}
+    accepted = SemanticReview(status="accepted", **metadata)
+    assert (accepted.factual_support, accepted.coverage, accepted.classification) == (None, None, None)
+    with pytest.raises(ValidationError):
+        SemanticReview(status="accepted", **{k: v for k, v in metadata.items() if k != "reviewer_id"})
+    with pytest.raises(ValidationError):
+        SemanticReview(status="accepted", **metadata, factual_support=True)

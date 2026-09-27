@@ -55,6 +55,23 @@ def test_missing_and_role(api):
     assert api.post('/api/v1/products/P/reviews',headers={**HEADERS,'Authorization':'Bearer pm-secret-value'},json=PAYLOAD).status_code==403
     assert api.get('/api/v1/products',headers=HEADERS).json()['items'][0]['id']=='P'
 
+def test_review_batch_metadata_is_product_scoped_and_excludes_held_out(api, database):
+    now=datetime.now(timezone.utc)
+    def batch(identifier, label, counts):
+        return {'_id':identifier,'dataset_id':'dataset','label':label,'held_out':label=='C',
+                'start_at':now-timedelta(days=1),'end_at':now,'review_count':sum(counts.values()),
+                'product_counts':counts}
+    database.batches.insert_many([batch('dataset:A','A',{'P':1000,'other':4}),
+                                  batch('dataset:B','B',{'other':1000}),
+                                  batch('dataset:C','C',{'P':100})])
+    path='/api/v1/products/P/review-batches'
+    pm={'Authorization':'Bearer pm-secret-value'}
+    response=api.get(path,headers=pm)
+    assert response.status_code==200
+    assert response.json()=={'items':[{'id':'dataset:A','label':'A','review_count':1000}]}
+    assert api.get(path,headers=HEADERS).status_code==403
+    assert api.get('/api/v1/products/missing/review-batches',headers=pm).status_code==404
+
 def test_concurrent_duplicate_is_one_durable_review(service,database):
     def submit(_):
         return service.submit('P',Principal(user_id='same',role='reviewer'),'retry',ReviewInput(**PAYLOAD))['id']

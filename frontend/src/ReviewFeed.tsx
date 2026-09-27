@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import type { Api, Review, ReviewListOptions } from "./types";
 import { errorMessage } from "./api";
 import { ErrorNotice, Loading } from "./ui";
@@ -8,9 +8,7 @@ const sentiments: { value: Sentiment; label: string }[] = [
   { value: "all", label: "All" }, { value: "positive", label: "Positive" },
   { value: "neutral", label: "Neutral" }, { value: "negative", label: "Negative" },
 ];
-const POLL_MS = 5000;
-
-export function ReviewFeed({ api, product, reviewVersion = 0 }: { api: Api; product: string; reviewVersion?: number }) {
+export function ReviewFeed({ api, product, reviewVersion = 0, active = true, revision }: { api: Api; product: string; reviewVersion?: number; active?: boolean; revision?: string }) {
   const [sentiment, setSentiment] = useState<Sentiment>("all");
   const [rating, setRating] = useState<ReviewListOptions["rating"]>();
   const [sort, setSort] = useState<"priority" | "newest">("priority");
@@ -20,6 +18,18 @@ export function ReviewFeed({ api, product, reviewVersion = 0 }: { api: Api; prod
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
   const [retry, setRetry] = useState(0);
+  const [revisionTick, setRevisionTick] = useState(0);
+  const lastRevision = useRef(revision);
+  const generation = useRef(0);
+
+  useEffect(() => {
+    if (revision === undefined) return;
+    if (lastRevision.current === undefined) { lastRevision.current = revision; return; }
+    if (lastRevision.current !== revision) {
+      lastRevision.current = revision;
+      setRevisionTick((n) => n + 1);
+    }
+  }, [revision]);
 
   useEffect(() => {
     setSentiment("all"); setRating(undefined); setSort("priority"); setPageCount(1);
@@ -27,8 +37,9 @@ export function ReviewFeed({ api, product, reviewVersion = 0 }: { api: Api; prod
   }, [product]);
 
   useEffect(() => {
+    if (!active) return;
+    const currentGeneration = ++generation.current;
     let cancelled = false;
-    let timer: ReturnType<typeof setTimeout>;
     const options: ReviewListOptions = { sort, limit: 5 };
     if (sentiment !== "all") options.sentiment = sentiment;
     if (rating) options.rating = rating;
@@ -49,15 +60,33 @@ export function ReviewFeed({ api, product, reviewVersion = 0 }: { api: Api; prod
       } catch (e) {
         if (!cancelled) setError(errorMessage(e));
       } finally {
-        if (!cancelled) {
-          setLoading(false);
-          if (!api.demo) timer = setTimeout(load, POLL_MS);
-        }
+        if (!cancelled) setLoading(false);
       }
     }
     void load();
-    return () => { cancelled = true; clearTimeout(timer); };
-  }, [api, product, sentiment, rating, sort, pageCount, reviewVersion, retry]);
+    return () => { cancelled = true; if (generation.current === currentGeneration) generation.current++; };
+  }, [api, product, sentiment, rating, sort, reviewVersion, revisionTick, retry, active]);
+
+  async function loadMore() {
+    if (!nextCursor || loading) return;
+    const currentGeneration = generation.current;
+    const options: ReviewListOptions = { sort, limit: 5 };
+    if (sentiment !== "all") options.sentiment = sentiment;
+    if (rating) options.rating = rating;
+    setLoading(true);
+    try {
+      const page = await api.reviews(product, undefined, undefined, nextCursor, options);
+      if (generation.current !== currentGeneration) return;
+      setItems((previous) => [...previous, ...page.items]);
+      setNextCursor(page.next_cursor);
+      setPageCount((count) => count + 1);
+      setError("");
+    } catch (e) {
+      if (generation.current === currentGeneration) setError(errorMessage(e));
+    } finally {
+      if (generation.current === currentGeneration) setLoading(false);
+    }
+  }
 
   function resetFilters(next: { sentiment?: Sentiment; rating?: ReviewListOptions["rating"]; sort?: "priority" | "newest" }) {
     if (next.sentiment !== undefined) setSentiment(next.sentiment);
@@ -90,6 +119,6 @@ export function ReviewFeed({ api, product, reviewVersion = 0 }: { api: Api; prod
         <time dateTime={review.timestamp}>{new Date(review.timestamp).toLocaleString()}</time></div>
       <h3>{review.title}</h3><p>{review.text}</p>
     </article>)}</div>}
-    {nextCursor && <button className="button" disabled={loading} onClick={() => { setLoading(true); setPageCount((n) => n + 1); }}>Load more reviews</button>}
+    {nextCursor && <button className="button" disabled={loading} onClick={() => void loadMore()}>Load more reviews</button>}
   </section>;
 }

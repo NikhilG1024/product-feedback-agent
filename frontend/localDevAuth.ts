@@ -23,5 +23,6 @@ export function proxyCredentialFor(state: LocalAuthState, address: string | unde
   const path = new URL(url, "http://localhost").pathname;
   if (method === "POST" && /^\/api\/v1\/products\/[^/]+\/reviews$/.test(path)) return state.reviewer;
   if (method === "GET" && /^\/api\/v1\/reviews\/[^/]+\/status$/.test(path)) return state.reviewer;
+  if (method === "GET" && /^\/api\/v1\/reviews\/[^/]+\/events$/.test(path)) return state.reviewer;
   return state.pm;
 }

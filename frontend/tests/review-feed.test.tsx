@@ -41,6 +41,8 @@ it("loads more and refreshes loaded pages when new reviews arrive", async () => 
   fireEvent.click(screen.getByRole("button", { name: "Load more reviews" }));
   expect(await screen.findByText("Text old-0")).toBeInTheDocument();
   expect(screen.getByRole("region", { name: "Product reviews" }).querySelectorAll(".review-feed-card")).toHaveLength(10);
+  expect(calls).toHaveBeenCalledTimes(2);
+  expect(calls.mock.calls.map((call) => call[3])).toEqual([undefined, "next"]);
   view.rerender(<ReviewFeed api={api} product="a" reviewVersion={1} />);
   await waitFor(() => expect(calls).toHaveBeenCalledWith("a", undefined, undefined, "next", { sort: "priority", limit: 5 }));
 });
@@ -57,17 +59,20 @@ it("does not show a prior product response after selection changes", async () =>
   expect(screen.queryByText("Text a")).not.toBeInTheDocument();
 });
 
-it("checks the selected live product again after five seconds", async () => {
+it("reloads on a changed revision without idle GETs", async () => {
   vi.useFakeTimers();
   try {
     const api = new DemoApi();
     Object.defineProperty(api, "demo", { value: false });
     const calls = vi.spyOn(api, "reviews").mockResolvedValueOnce({ items: [review("first", 2)], next_cursor: null })
       .mockResolvedValue({ items: [review("second", 1)], next_cursor: null });
-    render(<ReviewFeed api={api} product="a" />);
+    const view = render(<ReviewFeed api={api} product="a" revision="first-revision" />);
     await act(async () => { await Promise.resolve(); });
     expect(screen.getByText("Text first")).toBeInTheDocument();
     await act(async () => { await vi.advanceTimersByTimeAsync(5000); });
+    expect(calls).toHaveBeenCalledTimes(1);
+    view.rerender(<ReviewFeed api={api} product="a" revision="second-revision" />);
+    await act(async () => { await Promise.resolve(); });
     expect(screen.getByText("Text second")).toBeInTheDocument();
     expect(calls).toHaveBeenCalledTimes(2);
   } finally { vi.useRealTimers(); }

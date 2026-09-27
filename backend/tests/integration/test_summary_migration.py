@@ -134,6 +134,30 @@ def test_rejected_semantic_review_allows_unknown_rubric_gates(database):
                 "factual_support": True, "coverage": None, "classification": True}})
 
 
+def test_accepted_draft_requires_attribution_without_factual_gate_claims(database):
+    from app.migrations.v3 import migrate
+    from pymongo.errors import WriteError
+    migrate(database, False)
+    now = datetime.now(timezone.utc)
+    base = {"product_id": "P", "version": 1, "parent_version": None,
+            "job_id": "accept-1", "kind": "initial", "narrative": "Draft",
+            "themes": [], "coverage": {"historical_sample_count": 0, "new_review_count": 0},
+            "delta_review_ids": [], "model_identity": "test", "prompt_version": "v1",
+            "guidance_references": [], "created_at": now}
+    metadata = {"reviewer_id": "owner", "reviewer_type": "human",
+                "reviewed_at": now, "artifact_sha256": "a" * 64,
+                "rubric_version": "explicit-draft-acceptance-v1"}
+    database.product_summary_versions.insert_one({**base, "_id": "accepted-1",
+        "semantic_review": {"status": "accepted", **metadata}})
+    with pytest.raises(WriteError):
+        database.product_summary_versions.insert_one({**base, "_id": "accepted-2",
+            "version": 2, "job_id": "accept-2", "semantic_review": {"status": "accepted"}})
+    with pytest.raises(WriteError):
+        database.product_summary_versions.insert_one({**base, "_id": "accepted-3",
+            "version": 3, "job_id": "accept-3", "semantic_review": {
+                "status": "accepted", **metadata, "factual_support": True}})
+
+
 def test_populated_index_build_refuses_insufficient_headroom_before_mutation(database, monkeypatch):
     from app.migrations import v3
     from app.repositories.capacity import CapacityGuard

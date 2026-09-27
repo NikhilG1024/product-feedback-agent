@@ -56,7 +56,7 @@ it("shows a generated initial candidate without treating it as published", async
   const question = vi.spyOn(api, "summaryQuestion");
   render(<SummaryDashboard api={api} product={headphone} />);
   expect(await screen.findByText("Generated initial summary")).toBeInTheDocument();
-  expect(screen.getByText("Validation pending")).toBeInTheDocument();
+  expect(screen.getByText("Awaiting publication")).toBeInTheDocument();
   expect(screen.getByText(/Based on 4 sampled historical reviews \+ 0 new reviews/)).toBeInTheDocument();
   expect(screen.queryByText("Summary evidence")).not.toBeInTheDocument();
   expect(await screen.findByRole("region", { name: "Product reviews" })).toHaveTextContent("What reviewers said");
@@ -80,39 +80,44 @@ it("labels an approved initial candidate as awaiting publication", async () => {
   expect(screen.queryByText("Current published summary")).not.toBeInTheDocument();
 });
 
-it("replaces a generated candidate with the current published summary on poll", async () => {
-  vi.useFakeTimers();
-  try {
-    const api = new DemoApi();
-    Object.defineProperty(api, "demo", { value: false });
-    const published = await api.summary(headphone.id);
-    const candidateView: SummaryView = { ...published, current: null,
-      initial_candidate: { ...published.current!, published_at: null,
-        semantic_review: { status: "pending" } }, last_updated_at: null, status: "uninitialized" };
-    vi.spyOn(api, "summary").mockResolvedValueOnce(candidateView).mockResolvedValue(published);
-    render(<SummaryDashboard api={api} product={headphone} />);
-    await act(async () => { await Promise.resolve(); });
-    expect(screen.getByText("Generated initial summary")).toBeInTheDocument();
-    await act(async () => { await vi.advanceTimersByTimeAsync(5000); });
-    expect(screen.getByText("Current published summary")).toBeInTheDocument();
-    expect(screen.queryByText("Generated initial summary")).not.toBeInTheDocument();
-  } finally { vi.useRealTimers(); }
+it("replaces a generated candidate with published summary events", async () => {
+  const api = new DemoApi();
+  Object.defineProperty(api, "demo", { value: false });
+  const published = await api.summary(headphone.id);
+  const candidateView: SummaryView = { ...published, current: null,
+    initial_candidate: { ...published.current!, published_at: null,
+      semantic_review: { status: "pending" } }, last_updated_at: null, status: "uninitialized" };
+  let push!: (event: { type: "summary"; view: SummaryView }) => void;
+  Object.assign(api, { watchProduct: vi.fn((_id, onEvent) => { push = onEvent; return new Promise<void>(() => {}); }) });
+  const summary = vi.spyOn(api, "summary");
+  render(<SummaryDashboard api={api} product={headphone} />);
+  await act(async () => { push({ type: "summary", view: candidateView }); });
+  expect(screen.getByText("Generated initial summary")).toBeInTheDocument();
+  await act(async () => { push({ type: "summary", view: published }); });
+  expect(screen.getByText("Current published summary")).toBeInTheDocument();
+  expect(screen.queryByText("Generated initial summary")).not.toBeInTheDocument();
+  expect(summary).not.toHaveBeenCalled();
 });
 
-it("polls the selected product until its published summary appears", async () => {
+it("waits for live summary events without periodic summary GETs", async () => {
   vi.useFakeTimers();
   try {
     const api = new DemoApi();
     Object.defineProperty(api, "demo", { value: false });
     const published = await api.summary(headphone.id);
     const empty: SummaryView = { ...published, current: null, last_updated_at: null, status: "uninitialized" };
-    const summary = vi.spyOn(api, "summary").mockResolvedValueOnce(empty).mockResolvedValue(published);
+    let push!: (event: { type: "summary"; view: SummaryView }) => void;
+    const watch = vi.fn((_id, onEvent) => { push = onEvent; return new Promise<void>(() => {}); });
+    Object.assign(api, { watchProduct: watch });
+    const summary = vi.spyOn(api, "summary");
     render(<SummaryDashboard api={api} product={headphone} />);
-    await act(async () => { await Promise.resolve(); });
+    await act(async () => { push({ type: "summary", view: empty }); });
     expect(screen.getByText("No published summary yet.")).toBeInTheDocument();
     await act(async () => { await vi.advanceTimersByTimeAsync(5000); });
+    expect(summary).not.toHaveBeenCalled();
+    await act(async () => { push({ type: "summary", view: published }); });
     expect(screen.getByText("Current published summary")).toBeInTheDocument();
-    expect(summary).toHaveBeenCalledTimes(2);
+    expect(watch).toHaveBeenCalledTimes(1);
   } finally {
     vi.useRealTimers();
   }
