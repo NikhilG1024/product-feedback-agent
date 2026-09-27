@@ -1,11 +1,12 @@
 # Product feedback frontend
 
 The default PM page shows the currently published product summary from a cached
-GET. It displays the publication date, version, exact cited review quotes,
+GET. It displays the publication date, version,
 historical sample and new-review coverage, pending count, summary status, and a
 separate Hindsight memory status. Product selection never starts a model job.
 Open **Version history** when needed to fetch older pages; questions and evidence
-stay bound to the selected immutable version. **Legacy analysis** retains the
+stay bound to the selected immutable version. Summary evidence is retained in
+the data but its separate UI section is hidden. **Legacy analysis** retains the
 earlier run-based workflow.
 
 ## Run
@@ -71,3 +72,14 @@ For a browser fixture check without live providers, use the existing
 `frontend/tests/contract_server.py` and `npm run test:contract` workflow. Do not
 point integration tests at the application MongoDB database. The production
 bundle is written to `dist/`; deploy it with an HTTPS reverse proxy for `/api/v1`.
+
+## Live review list
+
+“What reviewers said” reads reviews directly from MongoDB, including submitted
+reviews not yet incorporated into a summary. New app submissions appear first,
+with negative, neutral, then positive ratings within each source group; newest
+reviews lead within each group. Use Newest first for global time order.
+Filter by star rating and rating-based sentiment (negative 1–2, neutral 3,
+positive 4–5); filters intersect. The list polls every five seconds in live mode
+and supports Load more. It is hidden when inspecting a historical summary so
+current reviews cannot be mistaken for historical evidence.
