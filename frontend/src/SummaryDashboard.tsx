@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from "react";
-import type { Answer, Api, Product, SummaryVersion, SummaryView } from "./types";
+import type { Api, Product, SummaryVersion, SummaryView } from "./types";
 import { errorMessage, uncertainWrite } from "./api";
 import { ErrorNotice, Loading } from "./ui";
 import { SummaryHistory } from "./SummaryHistory";
@@ -17,39 +17,6 @@ function latestView(previous: SummaryView | null, next: SummaryView, product: st
 function coverageLabel(v: SummaryVersion) {
   return `Based on ${v.coverage.historical_sample_count} sampled historical review${v.coverage.historical_sample_count === 1 ? "" : "s"} + ${v.coverage.new_review_count} new review${v.coverage.new_review_count === 1 ? "" : "s"}`;
 }
-function SummaryQuestions({ api, product, version }: { api: Api; product: string; version: number }) {
-  const [question, setQuestion] = useState("");
-  const [answer, setAnswer] = useState<Answer | null>(null);
-  const [error, setError] = useState("");
-  const [busy, setBusy] = useState(false);
-  const requestId = useRef(0);
-  useEffect(() => { requestId.current++; setAnswer(null); setError(""); setQuestion(""); }, [product, version]);
-  async function ask() {
-    if (!question.trim() || busy) return;
-    const id = ++requestId.current;
-    setBusy(true); setError(""); setAnswer(null);
-    try {
-      const result = await api.summaryQuestion(product, version, question.trim());
-      if (id === requestId.current) setAnswer(result);
-    } catch (e) { if (id === requestId.current) setError(errorMessage(e)); }
-    finally { if (id === requestId.current) setBusy(false); }
-  }
-  return <section className="summary-questions" aria-label={`Questions about version ${version}`}>
-    <h3>Ask about version {version}</h3>
-    <form onSubmit={(e) => { e.preventDefault(); void ask(); }}>
-      <label className="field">Question
-        <input value={question} maxLength={1000} onChange={(e) => setQuestion(e.target.value)} placeholder="What do reviewers say about…?" />
-      </label>
-      <button className="button primary" disabled={busy || !question.trim()}>{busy ? "Asking…" : "Ask"}</button>
-    </form>
-    {error && <ErrorNotice message={error} />}
-    {answer && <div className="answer"><p>{answer.answer}</p>
-      {answer.insufficient_evidence && <p>There is not enough evidence in this version to answer confidently.</p>}
-      {answer.evidence.map((e) => <blockquote key={`${e.review_id}:${e.quote}`}>{e.quote}<cite>Review {e.review_id}</cite></blockquote>)}
-    </div>}
-  </section>;
-}
-
 export function SummaryDashboard({ api, product, reviewVersion = 0 }: { api: Api; product: Product; reviewVersion?: number }) {
   const [view, setView] = useState<SummaryView | null>(null);
   const [selectedVersion, setSelectedVersion] = useState<number | null>(null);
@@ -173,7 +140,6 @@ export function SummaryDashboard({ api, product, reviewVersion = 0 }: { api: Api
           <p className="summary-text">{version.narrative}</p>
           {version.guidance_references.length > 0 && <p className="fine-print">Guidance used in this version: {version.guidance_references.join(", ")}</p>}
           {selectedVersion === null && <ReviewFeed key={product.id} api={api} product={product.id} reviewVersion={reviewVersion} />}
-          <SummaryQuestions key={`${product.id}:${version.version}`} api={api} product={product.id} version={version.version} />
         </article>}
       </>}
       {!view.current && !candidate && <ReviewFeed key={product.id} api={api} product={product.id} reviewVersion={reviewVersion} />}

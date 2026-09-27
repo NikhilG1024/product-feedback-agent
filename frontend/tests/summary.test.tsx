@@ -156,7 +156,7 @@ it("uses the same key after an uncertain refresh response", async () => {
   expect(refresh.mock.calls[0][2]).toBe(refresh.mock.calls[1][2]);
 });
 
-it("paginates history and binds questions to the selected version", async () => {
+it("paginates history without showing a question form", async () => {
   const api = new DemoApi();
   for (let i = 0; i < 3; i++) {
     await api.submit(headphone.id, { rating: 3, title: `Review ${i}`, text: `Review text ${i}` }, `key-${i}`);
@@ -171,9 +171,9 @@ it("paginates history and binds questions to the selected version", async () => 
   expect(await screen.findByText("Historical version 1")).toBeInTheDocument();
   expect(screen.queryByRole("region", { name: "Product reviews" })).not.toBeInTheDocument();
   expect(screen.queryByText(/Guidance used in this version:/)).not.toBeInTheDocument();
-  fireEvent.change(screen.getByRole("textbox", { name: "Question" }), { target: { value: "How is the battery?" } });
-  fireEvent.click(screen.getByRole("button", { name: "Ask" }));
-  await waitFor(() => expect(question).toHaveBeenCalledWith(headphone.id, 1, "How is the battery?"));
+  expect(screen.queryByRole("textbox", { name: "Question" })).not.toBeInTheDocument();
+  expect(screen.queryByText(/Ask about version/)).not.toBeInTheDocument();
+  expect(question).not.toHaveBeenCalled();
 });
 
 it("retries the first history request when it fails", async () => {

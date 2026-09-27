@@ -29,7 +29,7 @@ export function ReviewFeed({ api, product, reviewVersion = 0 }: { api: Api; prod
   useEffect(() => {
     let cancelled = false;
     let timer: ReturnType<typeof setTimeout>;
-    const options: ReviewListOptions = { sort, limit: 20 };
+    const options: ReviewListOptions = { sort, limit: 5 };
     if (sentiment !== "all") options.sentiment = sentiment;
     if (rating) options.rating = rating;
     async function load() {

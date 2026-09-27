@@ -36,7 +36,11 @@ def test_exact_free_ultra_request_and_locally_validated_json():
     assert str(request.url) == OPENROUTER_SUMMARY_URL + "/chat/completions"
     assert request.headers["Authorization"] == "Bearer secret"
     assert payload["model"] == OPENROUTER_SUMMARY_MODEL == "nvidia/nemotron-3-ultra-550b-a55b:free"
-    assert payload["messages"] == MESSAGES
+    assert payload["messages"][1] == MESSAGES[1]
+    assert payload["messages"][0]["content"].startswith(MESSAGES[0]["content"])
+    assert "1 to 3 items, never 4 or more" in payload["messages"][0]["content"]
+    assert model.summary_prompt_budget_bytes + len(
+        payload["messages"][0]["content"].removeprefix(MESSAGES[0]["content"]).encode("utf-8")) == 64000
     assert payload["stream"] is False
     assert payload["reasoning"] == {"enabled": False}
     assert payload["provider"]["max_price"] == {"prompt": 0, "completion": 0}
@@ -99,3 +103,29 @@ def test_non_dict_messages_are_sanitized_before_network():
         lambda _: pytest.fail("invalid messages reached network")))
     with pytest.raises(ProviderError, match="model_invalid_input"):
         model.generate_summary([MESSAGES[0], "bad"], GeneratedSummary)
+
+
+def test_surplus_old_representatives_compact_without_losing_new_review():
+    evidence = [{"review_id": f"old-{i}", "quote": f"Old quote {i}"} for i in range(3)]
+    evidence.append({"review_id": "r1", "quote": "Battery lasts all day."})
+    output = {**OUTPUT, "themes": [{**OUTPUT["themes"][0], "evidence": evidence}]}
+    model = OpenRouterSummaryModel("secret", transport=httpx.MockTransport(
+        lambda _: completion(json.dumps(output))))
+    result = model.generate_summary(MESSAGES, GeneratedSummary)
+    kept = result["themes"][0]["evidence"]
+    assert len(kept) == 3
+    assert kept[0] == evidence[-1]
+    assert kept[1:] == evidence[:2]
+
+
+def test_four_distinct_fresh_reviews_in_one_theme_still_reject():
+    reviews = [{"id": f"r{i}", "title": "Battery", "text": f"Review {i}", "rating": 5}
+               for i in range(4)]
+    messages = _prompt_messages({"id": "P", "title": "Headphones", "product_type": None},
+                                None, reviews, [])
+    evidence = [{"review_id": f"r{i}", "quote": f"Review {i}"} for i in range(4)]
+    output = {**OUTPUT, "themes": [{**OUTPUT["themes"][0], "evidence": evidence}]}
+    model = OpenRouterSummaryModel("secret", transport=httpx.MockTransport(
+        lambda _: completion(json.dumps(output))))
+    with pytest.raises(ProviderError, match="^model_invalid_output$"):
+        model.generate_summary(messages, GeneratedSummary)

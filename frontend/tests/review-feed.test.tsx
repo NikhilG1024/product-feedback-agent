@@ -18,29 +18,31 @@ it("requests priority feed and filters at the server without confusing it with s
   expect(screen.getByText("What reviewers said")).toBeInTheDocument();
   expect(screen.getByText("New review")).toBeInTheDocument();
   expect(within(screen.getByText("Title new-one").closest("article")!).getByText("1 star")).toBeInTheDocument();
-  expect(calls).toHaveBeenCalledWith("a", undefined, undefined, undefined, { sort: "priority", limit: 20 });
+  expect(calls).toHaveBeenCalledWith("a", undefined, undefined, undefined, { sort: "priority", limit: 5 });
   fireEvent.click(screen.getByRole("button", { name: "Negative" }));
   await waitFor(() => expect(calls).toHaveBeenLastCalledWith("a", undefined, undefined, undefined,
-    { sort: "priority", sentiment: "negative", limit: 20 }));
+    { sort: "priority", sentiment: "negative", limit: 5 }));
   fireEvent.change(screen.getByLabelText("Rating"), { target: { value: "1" } });
   await waitFor(() => expect(calls).toHaveBeenLastCalledWith("a", undefined, undefined, undefined,
-    { sort: "priority", sentiment: "negative", rating: 1, limit: 20 }));
+    { sort: "priority", sentiment: "negative", rating: 1, limit: 5 }));
   fireEvent.change(screen.getByLabelText("Review order"), { target: { value: "newest" } });
   await waitFor(() => expect(calls).toHaveBeenLastCalledWith("a", undefined, undefined, undefined,
-    { sort: "newest", sentiment: "negative", rating: 1, limit: 20 }));
+    { sort: "newest", sentiment: "negative", rating: 1, limit: 5 }));
 });
 
 it("loads more and refreshes loaded pages when new reviews arrive", async () => {
   const api = new DemoApi();
   const calls = vi.spyOn(api, "reviews").mockImplementation(async (_p, _s, _b, cursor) => cursor
-    ? { items: [review("old", 5)], next_cursor: null }
-    : { items: [review("new", 1)], next_cursor: "next" });
+    ? { items: Array.from({ length: 5 }, (_, i) => review(`old-${i}`, 5)), next_cursor: null }
+    : { items: Array.from({ length: 5 }, (_, i) => review(`new-${i}`, 1)), next_cursor: "next" });
   const view = render(<ReviewFeed api={api} product="a" reviewVersion={0} />);
-  expect(await screen.findByText("Text new")).toBeInTheDocument();
+  expect(await screen.findByText("Text new-0")).toBeInTheDocument();
+  expect(screen.getByRole("region", { name: "Product reviews" }).querySelectorAll(".review-feed-card")).toHaveLength(5);
   fireEvent.click(screen.getByRole("button", { name: "Load more reviews" }));
-  expect(await screen.findByText("Text old")).toBeInTheDocument();
+  expect(await screen.findByText("Text old-0")).toBeInTheDocument();
+  expect(screen.getByRole("region", { name: "Product reviews" }).querySelectorAll(".review-feed-card")).toHaveLength(10);
   view.rerender(<ReviewFeed api={api} product="a" reviewVersion={1} />);
-  await waitFor(() => expect(calls).toHaveBeenCalledWith("a", undefined, undefined, "next", { sort: "priority", limit: 20 }));
+  await waitFor(() => expect(calls).toHaveBeenCalledWith("a", undefined, undefined, "next", { sort: "priority", limit: 5 }));
 });
 
 it("does not show a prior product response after selection changes", async () => {
@@ -74,7 +76,7 @@ it("checks the selected live product again after five seconds", async () => {
 it("uses explicit review-list filters only for the feed request", async () => {
   const fetcher = vi.fn().mockResolvedValue(new Response(JSON.stringify({ items: [], next_cursor: null })));
   await new HttpApi("token", fetcher).reviews("a/b", undefined, undefined, "cursor/id", {
-    sort: "priority", sentiment: "negative", rating: 1, limit: 20,
+    sort: "priority", sentiment: "negative", rating: 1, limit: 5,
   });
-  expect(fetcher.mock.calls[0][0]).toBe("/api/v1/products/a%2Fb/reviews?limit=20&cursor=cursor%2Fid&sentiment=negative&rating=1&sort=priority");
+  expect(fetcher.mock.calls[0][0]).toBe("/api/v1/products/a%2Fb/reviews?limit=5&cursor=cursor%2Fid&sentiment=negative&rating=1&sort=priority");
 });
