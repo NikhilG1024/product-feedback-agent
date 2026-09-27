@@ -65,17 +65,18 @@ it("drops an old page when polling switches to a new run", async () => {
 });
 
 it.each([
-  ["running", 5, 0, /Estimating finish after 6 products/],
-  ["running", 5, 1, /Approx\. 6 min remaining/],
-  ["completed", 12, 0, /Initialization finished/],
-] as const)("shows bounded finish estimate for %s with %i completed and %i failed", async (status, completed, failed, expected) => {
+  ["running", 5, 0, "available", /Estimating finish after 6 products/],
+  ["running", 5, 1, "available", /Approx\. 6 min remaining/],
+  ["running", 5, 1, "stale", /Estimate unavailable until progress updates/],
+  ["completed", 12, 0, "available", /Initialization finished/],
+] as const)("shows bounded finish estimate for %s with %i completed, %i failed, %s telemetry", async (status, completed, failed, availability, expected) => {
   vi.useFakeTimers();
   vi.setSystemTime(new Date("2026-09-27T12:06:00Z"));
   try {
     const api = new DemoApi();
     Object.defineProperty(api, "demo", { value: false });
     vi.spyOn(api, "summaryProgress").mockResolvedValue({
-      availability: "available",
+      availability,
       progress: {
         run_id: "run-a", started_at: "2026-09-27T12:00:00Z",
         updated_at: "2026-09-27T12:06:00Z", status,
@@ -88,11 +89,12 @@ it.each([
     let view!: ReturnType<typeof render>;
     await act(async () => { view = render(<InitializationProgress api={api} />); });
     expect(screen.getByText(expected)).toBeInTheDocument();
-    if (status === "running") expect(screen.getByText("Elapsed: 6 min")).toBeInTheDocument();
-    if (completed + failed === 6) {
+    if (status === "running") expect(screen.getByText(availability === "stale" ? "Elapsed since start (progress stale): 6 min" : "Elapsed: 6 min")).toBeInTheDocument();
+    if (completed + failed === 6 && availability === "available") {
       const localFinish = new Date("2026-09-27T12:12:00Z").toLocaleString();
       expect(screen.getByText(`Estimated local finish: ${localFinish}`)).toBeInTheDocument();
     }
+    if (availability === "stale") expect(screen.queryByText(/Estimated local finish:/)).not.toBeInTheDocument();
     view.unmount();
   } finally {
     vi.useRealTimers();

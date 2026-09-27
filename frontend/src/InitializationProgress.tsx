@@ -51,7 +51,7 @@ export function InitializationProgress({ api }: { api: Api }) {
   const processed = progress ? progress.completed + progress.failed : 0;
   const now = Date.now();
   const elapsed = progress ? Math.max(0, (now - Date.parse(progress.started_at)) / 1000) : 0;
-  const remainingSeconds = progress && progress.status === "running" && processed >= 6
+  const remainingSeconds = progress && result?.availability === "available" && progress.status === "running" && processed >= 6
     ? Math.max(0, Math.ceil(elapsed / processed * (progress.total - processed)))
     : null;
   const remainingMinutes = remainingSeconds === null ? null : Math.max(1, Math.round(remainingSeconds / 60));
@@ -72,9 +72,11 @@ export function InitializationProgress({ api }: { api: Api }) {
           <p>{progress.completed} citation-checked · {progress.active} active · {progress.queued} queued · {progress.failed} need review · {progress.total} total</p>
           <p>Published summaries: unknown. Citation checks do not publish a summary.</p>
           <p>Last progress update: {new Date(progress.updated_at).toLocaleString()} · Run {progress.run_id}</p>
-          {progress.status === "running" && <p>Elapsed: {Math.floor(elapsed / 60)} min</p>}
+          {progress.status === "running" && <p>{result.availability === "stale" ? "Elapsed since start (progress stale)" : "Elapsed"}: {Math.floor(elapsed / 60)} min</p>}
           {progress.status !== "running" ? (
             <p>Initialization finished. Semantic review and publication are separate steps.</p>
+          ) : result.availability === "stale" ? (
+            <p>Estimate unavailable until progress updates.</p>
           ) : remainingSeconds === null ? (
             <p>Estimating finish after 6 products have been processed.</p>
           ) : (
