@@ -161,14 +161,14 @@ def test_split_requests_checkpoint_each_validated_stage_and_resume():
     second = output([theme("one", "r1", "first."), theme("two", "r2", "second.")])
     checkpoints = []
     provider = FakeProvider([first, second])
-    generator = SummaryGenerator(provider, lookup, max_prompt_bytes=4300,
+    generator = SummaryGenerator(provider, lookup, max_prompt_bytes=5000,
                                  save_checkpoint=lambda state: checkpoints.append(state))
     result = generator.generate(PRODUCT, None, reviews, [])
     assert result.model_dump() == second
     assert len(provider.messages) == 2
     assert checkpoints[0]["processed_review_ids"] == ["r1"]
     assert checkpoints[1]["processed_review_ids"] == ["r1", "r2"]
-    resumed = SummaryGenerator(FakeProvider([second]), lookup, max_prompt_bytes=4300).generate(
+    resumed = SummaryGenerator(FakeProvider([second]), lookup, max_prompt_bytes=5000).generate(
         PRODUCT, None, reviews, [], checkpoint=checkpoints[0])
     assert resumed.model_dump() == second
 
@@ -179,7 +179,7 @@ def test_intermediate_checkpoint_cannot_cite_a_future_frozen_review():
     provider = FakeProvider([future])
     checkpoints = []
     with pytest.raises(SummaryGenerationError, match="summary_unsupported_evidence"):
-        SummaryGenerator(provider, lookup, max_prompt_bytes=4300,
+        SummaryGenerator(provider, lookup, max_prompt_bytes=5000,
                          save_checkpoint=checkpoints.append).generate(PRODUCT, None, reviews, [])
     assert len(provider.messages) == 1
     assert checkpoints == []
@@ -218,6 +218,29 @@ def test_old_review_cannot_gain_new_quote_from_raw_text_not_in_prior_supported_p
     with pytest.raises(SummaryGenerationError, match="summary_unsupported_evidence"):
         SummaryGenerator(provider, extra).generate(PRODUCT, old,
             [review("new", "Battery works well.")], [])
+
+
+def test_title_only_old_and_new_quotes_are_exact_supported_sources():
+    initial = parent([theme("title-theme", "old", "Quiet sound")])
+    source = lambda _product, ids: {identifier: review(identifier, "Body says something else.",
+        title="Quiet sound") for identifier in ids}
+    result = SummaryGenerator(FakeProvider([output([
+        theme("title-theme", "old", "Quiet sound"),
+        theme("new-theme", "new", "Clear audio")])]), source).generate(
+            PRODUCT, initial, [review("new", "The body describes comfort.", title="Clear audio")], [])
+    assert {item.quote for theme_item in result.themes for item in theme_item.evidence} == {
+        "Quiet sound", "Clear audio"}
+
+
+def test_quote_cannot_cross_title_body_boundary_or_normalize_spaces():
+    provider = FakeProvider([output([theme("bad", "new", "Quiet sound")])])
+    with pytest.raises(SummaryGenerationError, match="summary_unsupported_evidence"):
+        SummaryGenerator(provider, lookup).generate(PRODUCT, None,
+            [review("new", "sound is clear.", title="Quiet")], [])
+    provider = FakeProvider([output([theme("bad", "new", "two spaces")])])
+    with pytest.raises(SummaryGenerationError, match="summary_unsupported_evidence"):
+        SummaryGenerator(provider, lookup).generate(PRODUCT, None,
+            [review("new", "two  spaces", title="Different")], [])
 
 
 @pytest.mark.parametrize("content,reason", [

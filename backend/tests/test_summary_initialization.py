@@ -82,6 +82,58 @@ def test_model_failure_prevents_any_write():
     with pytest.raises(ValueError):prepare(m,r,a)
 
 
+def test_expected_file_index_rejects_changed_extra_and_missing_artifacts(tmp_path):
+    from app.summaries.initialization import load_artifacts
+    manifest, reviews, artifact = bundle(1)
+    manifest_path = tmp_path / 'manifest.json'
+    reviews_path = tmp_path / 'reviews.jsonl'
+    folder = tmp_path / 'generated-summaries'
+    folder.mkdir()
+    path = folder / 'P.json'
+    index_path = tmp_path / 'import-artifact-index.json'
+    manifest_path.write_text(json.dumps(manifest))
+    reviews_path.write_text(json.dumps({'product_id':'P','reviews':reviews}) + '\n')
+    path.write_text(json.dumps(artifact))
+    index = {'schema_version':1,'total':1,'artifacts':[{'path':str(path.resolve()),
+        'group':folder.name,'product_id':'P','bytes_sha256':hashlib.sha256(path.read_bytes()).hexdigest(),
+        'status':'citation_checks_passed'}]}
+    index_path.write_text(json.dumps(index))
+    assert len(load_artifacts(manifest_path, reviews_path, [folder], index_path)) == 1
+    changed = dict(artifact, narrative='Changed after authorization')
+    path.write_text(json.dumps(changed))
+    with pytest.raises(ValueError, match='hash'):
+        load_artifacts(manifest_path, reviews_path, [folder], index_path)
+    path.write_text(json.dumps(artifact))
+    extra = folder / 'extra.json'
+    extra.write_text(json.dumps(artifact))
+    with pytest.raises(ValueError, match='unexpected'):
+        load_artifacts(manifest_path, reviews_path, [folder], index_path)
+    extra.unlink()
+    path.unlink()
+    with pytest.raises(ValueError):
+        load_artifacts(manifest_path, reviews_path, [folder], index_path)
+
+
+def test_expected_file_index_rejects_wrong_product_and_group(tmp_path):
+    from app.summaries.initialization import load_artifacts
+    manifest, reviews, artifact = bundle(1)
+    folder = tmp_path / 'generated-summaries'
+    folder.mkdir()
+    path = folder / 'P.json'
+    path.write_text(json.dumps(artifact))
+    manifest_path = tmp_path / 'manifest.json'
+    reviews_path = tmp_path / 'reviews.jsonl'
+    index_path = tmp_path / 'index.json'
+    manifest_path.write_text(json.dumps(manifest))
+    reviews_path.write_text(json.dumps({'product_id':'P','reviews':reviews}) + '\n')
+    entry = {'path':str(path.resolve()),'group':folder.name,'product_id':'P',
+             'bytes_sha256':hashlib.sha256(path.read_bytes()).hexdigest()}
+    for change in ({'product_id':'Q'}, {'group':'other'}):
+        index_path.write_text(json.dumps({'schema_version':1,'total':1,'artifacts':[{**entry,**change}]}))
+        with pytest.raises(ValueError):
+            load_artifacts(manifest_path, reviews_path, [folder], index_path)
+
+
 @pytest.fixture
 def live_repo():
     import os

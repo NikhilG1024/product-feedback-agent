@@ -56,11 +56,37 @@ class SummaryWorker:
             count += 1
         return count
 
-    def _guidance(self, product_id):
-        rows = list(self.database.decisions.find({"parent_asin": product_id})
-                    .sort([("decided_at", -1), ("_id", -1)]).limit(100))
-        return [{"id": str(row["_id"]), "kind": row["kind"], "rationale": row["rationale"]}
-                for row in reversed(rows)]
+    def _guidance(self, claim, prospective_review_ids):
+        """Freeze only decisions admitted by claim time and grounded in coverage."""
+        product_id = claim.product_id
+        state = self.repository.states.find_one({"_id": product_id,
+            "job.owner_token": claim.owner_token}, {"job.boundary": 1})
+        if not state:
+            raise SummaryGenerationError("summary_claim_lost")
+        boundary = state["job"]["boundary"]
+        # Reconciliation removes orphan ledger marks before selecting eligible
+        # evidence. Newly frozen review IDs are the only unpublished additions.
+        self.repository.reconcile(product_id)
+        allowed = {row["review_id"] for row in self.repository.inputs.find({
+            "product_id": product_id, "source": {"$in": ["initial", "user_submission"]},
+            "incorporated_version": {"$ne": None}}, {"review_id": 1})}
+        allowed.update(prospective_review_ids)
+        markers = self.repository.inputs.find({"product_id": product_id,
+            "source": "refresh_guidance", "admission_sequence": {"$lte": boundary}},
+            {"review_id": 1}).sort("admission_sequence", -1).limit(100)
+        prefix = "_refresh:decision:"
+        ids = [row["review_id"][len(prefix):] for row in markers
+               if row["review_id"].startswith(prefix)]
+        rows = {str(row["_id"]): row for row in self.database.decisions.find({
+            "_id": {"$in": ids}, "parent_asin": product_id})}
+        selected = []
+        for decision_id in reversed(ids):
+            row = rows.get(decision_id)
+            if row is None or not set(row.get("evidence_ids", [])) <= allowed:
+                continue
+            selected.append({"id": decision_id, "kind": row["kind"],
+                             "rationale": row["rationale"]})
+        return selected
 
     def _heartbeat(self, claim, done, lost):
         while not done.wait(max(1, self.lease_seconds / 3)):
@@ -122,7 +148,9 @@ class SummaryWorker:
                 parent = self.repository.version(claim.product_id, claim.parent_version)
                 if product is None or parent is None:
                     raise SummaryGenerationError("summary_parent_missing")
-                candidate_guidance = self._guidance(claim.product_id)
+                prospective_reviews = self.repository.pending_rows(claim)
+                candidate_guidance = self._guidance(claim,
+                    {str(row["_id"]) for row in prospective_reviews})
                 frozen = self.repository.freeze(claim, [], [item["id"] for item in candidate_guidance])
                 frozen_guidance = {item["id"]: item for item in candidate_guidance}
                 missing_guidance = [item_id for item_id in frozen.guidance_ids if item_id not in frozen_guidance]

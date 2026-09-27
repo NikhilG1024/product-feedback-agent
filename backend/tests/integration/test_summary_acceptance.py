@@ -78,7 +78,7 @@ def approved_initial_fixture(database, repo):
     content = GeneratedSummary(narrative="Initial synthetic feedback is positive.", themes=[{
         "id": "sound", "description": "Clear sound", "issue_type": "preference",
         "polarity": "positive", "evidence": [{"review_id": historical["_id"],
-            "quote": historical["text"]}]}])
+            "quote": historical["title"]}]}])
     candidate = SummaryVersion(**content.model_dump(), product_id="P", version=1,
         parent_version=None, job_id="synthetic-initial", kind="initial",
         coverage={"historical_sample_count": 1, "new_review_count": 0},
@@ -122,7 +122,7 @@ def test_synthetic_summary_cutover_acceptance(database):
     version_two = repo.current("P").current
     assert version_two.version == 2
     assert version_two.coverage.new_review_count == 1
-    assert historical["text"] == repo.version("P", 1).themes[0].evidence[0].quote
+    assert historical["title"] == repo.version("P", 1).themes[0].evidence[0].quote
     assert repo.version("P", 1).narrative == "Initial synthetic feedback is positive."
     assert provider.calls == 1
     assert [item.version for item in repo.history("P", None, 10).items] == [2, 1]

@@ -191,3 +191,29 @@ def test_summary_routes_replay_isolation_and_historical_questions(setup):
                       json={"version": 1, "question": "What changed?"}).json()
     assert answer["insufficient_evidence"] is True
     assert provider.calls == 0
+
+
+def test_guidance_respects_membership_and_claim_boundary(setup):
+    database, repo = setup
+    publish_empty_initial(repo)
+    now = datetime.now(timezone.utc)
+    review = {"_id": "eligible", "parent_asin": "P", "source": "user_submission",
+              "timestamp": now, "text": "Included feedback"}
+    repo.admit_review(review)
+    def decision(identifier, evidence, product="P"):
+        database.decisions.insert_one({"_id": identifier, "parent_asin": product,
+            "kind": "preference", "rationale": "Synthetic guidance " + identifier,
+            "evidence_ids": evidence, "decided_at": now, "available_through": now})
+        repo.request_refresh(product, "decision:" + identifier, "guidance")
+    decision("included", ["eligible"])
+    decision("heldout", ["excluded-heldout"])
+    decision("other-product", [], product="Q")
+    worker = SummaryWorker(database, repo, Provider(), memory=Memory())
+    claim = repo.claim("P", now, 180)
+    # Arrives after the claim's persisted admission boundary.
+    decision("late", ["eligible"])
+    selected = worker._guidance(claim, {"eligible"})
+    assert [item["id"] for item in selected] == ["included"]
+    frozen = repo.freeze(claim, [], [item["id"] for item in selected])
+    assert frozen.guidance_ids == ["included"]
+    assert "_refresh:decision:late" not in frozen.refresh_ids

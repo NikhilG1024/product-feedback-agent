@@ -10,11 +10,21 @@ Load the server environment securely before invoking the module from `backend`:
   --reviews /absolute/path/sampled-reviews.jsonl \
   --artifacts /absolute/path/generated-summaries \
   --artifacts /absolute/path/corrective-pilot \
+  --expected-index /absolute/path/import-artifact-index.json \
   --rejections /absolute/path/persistence-rejections.json \
   --report /absolute/path/preflight.json
 ```
 
-This default is read-only: it validates all artifacts, source membership and hashes against live reviews, then checks global capacity. Apply the reviewed additive v3 migration separately; add `--apply` to stage after preflight. Repeating the import reuses stable product/job identity and existing membership. Submitted reviews retain independent pending membership; no unsampled historical review is admitted.
+This default is read-only: it requires the current authorized exact-file index,
+matches every listed path, group, product, and byte hash, and rejects extra or
+missing files before any database write. Each hashed artifact must still report
+`citation_checks_passed`. It then validates source membership and hashes against
+live reviews and checks global capacity. Use the 306-entry
+`import-artifact-index.json` for the current cohort; the older 62-entry frozen
+index is superseded. Apply the reviewed additive v3 migration separately; add
+`--apply` to stage after preflight. Repeating the import reuses stable product/job
+identity and existing membership. Submitted reviews retain independent pending
+membership; no unsampled historical review is admitted.
 
 The source JSONL has one product object per line with `product_id` and ordered `reviews`. The manifest records product `_id`, eligible count, selected IDs, sample size and SHA256, random seed, sample time and A/B cutoff. Select exactly `min(20, eligible_count)` without replacement. Each imported historical source must match the live database and exclude C/held-out/submitted records. Live source readback finishes before writes. Imported historical records are expected to be immutable; concurrent historical mutation is unsupported.
 

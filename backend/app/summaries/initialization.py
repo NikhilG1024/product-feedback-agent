@@ -106,8 +106,23 @@ def verify_live_sources(prepared, database):
         raise ValueError('live product missing')
 
 
-def load_artifacts(manifest_path, reviews_path, artifact_dirs, rejection_path=None):
+def load_artifacts(manifest_path, reviews_path, artifact_dirs, expected_index_path, rejection_path=None):
     from pathlib import Path
+    expected_index = json.loads(Path(expected_index_path).read_bytes())
+    entries = expected_index.get('artifacts') if isinstance(expected_index, dict) else None
+    if (not isinstance(expected_index, dict) or expected_index.get('schema_version') != 1 or
+            not isinstance(entries, list) or type(expected_index.get('total')) is not int or
+            expected_index['total'] != len(entries)):
+        raise ValueError('invalid expected artifact index')
+    expected = {}
+    for entry in entries:
+        if (not isinstance(entry, dict) or not all(isinstance(entry.get(key), str) and entry[key]
+                for key in ('path', 'group', 'product_id', 'bytes_sha256'))):
+            raise ValueError('invalid expected artifact entry')
+        path = str(Path(entry['path']).resolve())
+        if path in expected or len(entry['bytes_sha256']) != 64:
+            raise ValueError('duplicate or invalid expected artifact')
+        expected[path] = entry
     manifest = json.loads(Path(manifest_path).read_bytes())
     snapshots = [json.loads(line) for line in Path(reviews_path).read_text().splitlines() if line.strip()]
     by_product = {row['product_id']: row['reviews'] for row in snapshots}
@@ -116,14 +131,26 @@ def load_artifacts(manifest_path, reviews_path, artifact_dirs, rejection_path=No
     rejections = json.loads(Path(rejection_path).read_bytes()) if rejection_path else {}
     prepared = []
     jobs = set()
+    seen = set()
     for directory in artifact_dirs:
         folder = Path(directory)
         paths = sorted(folder.glob('*.json'))
         if not paths:
             raise ValueError('empty artifact directory')
         for path in paths:
+            resolved = str(path.resolve())
+            entry = expected.get(resolved)
+            if entry is None or resolved in seen or entry['group'] != folder.name:
+                raise ValueError('unexpected artifact path or group')
+            seen.add(resolved)
             raw = path.read_bytes()
+            digest = hashlib.sha256(raw).hexdigest()
+            if digest != entry['bytes_sha256']:
+                raise ValueError('artifact byte hash differs from expected index')
             artifact = json.loads(raw)
+            if artifact.get('product_id') != entry['product_id'] or (
+                    'status' in entry and artifact.get('status') != entry['status']):
+                raise ValueError('artifact product or status differs from expected index')
             item = prepare_artifact(manifest, by_product[artifact['product_id']], raw, group=folder.name)
             if item.candidate.job_id in jobs:
                 raise ValueError('duplicate artifact job')
@@ -134,6 +161,8 @@ def load_artifacts(manifest_path, reviews_path, artifact_dirs, rejection_path=No
                     raise ValueError('import accepts rejection records only; approvals require separate review')
                 item.model_manifest['import_provenance']['semantic_rejection'] = audit
             prepared.append(item)
+    if seen != set(expected):
+        raise ValueError('expected artifact missing from import')
     return prepared
 
 
@@ -163,11 +192,14 @@ def main():
     parser.add_argument('--manifest', required=True)
     parser.add_argument('--reviews', required=True)
     parser.add_argument('--artifacts', action='append', required=True)
+    parser.add_argument('--expected-index', required=True,
+                        help='Authorized exact path/group/product/byte-hash snapshot')
     parser.add_argument('--rejections')
     parser.add_argument('--report', required=True)
     parser.add_argument('--apply', action='store_true', help='Write staged drafts; default validates only')
     args = parser.parse_args()
-    prepared = load_artifacts(args.manifest, args.reviews, args.artifacts, args.rejections)
+    prepared = load_artifacts(args.manifest, args.reviews, args.artifacts,
+                              args.expected_index, args.rejections)
     settings = Settings.from_env()
     with MongoClient(settings.mongo_uri, tz_aware=True, serverSelectionTimeoutMS=10000) as client:
         db = client[settings.mongo_database]
