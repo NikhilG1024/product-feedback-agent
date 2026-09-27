@@ -29,6 +29,11 @@ class GeneratedSummary(Contract):
     contradictions: list[str] = Field(default_factory=list, max_length=10)
 
 
+class CompactGeneratedSummary(GeneratedSummary):
+    """Bound new narratives without invalidating immutable historical versions."""
+    narrative: str = Field(min_length=1, max_length=900)
+
+
 class SummaryCoverage(Contract):
     historical_sample_count: int = Field(strict=True, ge=0)
     new_review_count: int = Field(strict=True, ge=0)

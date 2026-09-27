@@ -44,7 +44,7 @@ class FakeProvider:
         self.messages = []
 
     def generate_summary(self, messages, output_schema):
-        assert output_schema is GeneratedSummary
+        assert issubclass(output_schema, GeneratedSummary)
         self.messages.append(messages)
         return next(self.responses)
 
@@ -161,14 +161,14 @@ def test_split_requests_checkpoint_each_validated_stage_and_resume():
     second = output([theme("one", "r1", "first."), theme("two", "r2", "second.")])
     checkpoints = []
     provider = FakeProvider([first, second])
-    generator = SummaryGenerator(provider, lookup, max_prompt_bytes=5000,
+    generator = SummaryGenerator(provider, lookup, max_prompt_bytes=5600,
                                  save_checkpoint=lambda state: checkpoints.append(state))
     result = generator.generate(PRODUCT, None, reviews, [])
     assert result.model_dump() == second
     assert len(provider.messages) == 2
     assert checkpoints[0]["processed_review_ids"] == ["r1"]
     assert checkpoints[1]["processed_review_ids"] == ["r1", "r2"]
-    resumed = SummaryGenerator(FakeProvider([second]), lookup, max_prompt_bytes=5000).generate(
+    resumed = SummaryGenerator(FakeProvider([second]), lookup, max_prompt_bytes=5600).generate(
         PRODUCT, None, reviews, [], checkpoint=checkpoints[0])
     assert resumed.model_dump() == second
 
@@ -254,3 +254,38 @@ def test_provider_rejects_malformed_or_incomplete_generation(content, reason):
     with pytest.raises(ProviderError, match="model_invalid_output"):
         model.generate_summary(_prompt_messages({"id": "P", "title": "T", "product_type": None},
             None, [{"id": "r1", "title": "Review", "text": "first.", "rating": 3}], []), GeneratedSummary)
+
+
+def test_rewrites_long_stored_summary_into_bounded_narrative_without_losing_evidence():
+    old = parent([theme("battery", "old", "Battery failed after an hour.")])
+    old.narrative = "Previous verbose detail. " * 70
+    response = output([theme("battery", "old", "Battery failed after an hour."),
+                       theme("comfort", "new", "Comfortable fit.", "positive")])
+    response["narrative"] = "Comfort is praised, but a reviewer reports battery failure."
+    provider = FakeProvider([response])
+    result = SummaryGenerator(provider, lookup).generate(PRODUCT, old, [review("new", "Comfortable fit.")], [])
+    assert len(result.narrative) <= 900
+    assert old.narrative == "Previous verbose detail. " * 70
+    assert {t.id for t in result.themes} == {"battery", "comfort"}
+    assert "Rewrite the entire narrative" in provider.messages[0][0]["content"]
+
+
+def test_rejects_appended_narrative_beyond_compact_limit():
+    response = output([theme("new", "new", "Comfortable fit.", "positive")])
+    response["narrative"] = "x" * 901
+    with pytest.raises((SummaryGenerationError, ProviderError), match="model_invalid_output"):
+        SummaryGenerator(FakeProvider([response]), lookup).generate(
+            PRODUCT, None, [review("new", "Comfortable fit.")], [])
+
+
+def test_reprocesses_oversized_legacy_checkpoint_instead_of_publishing_it():
+    result = output([theme("new", "new", "Comfortable fit.", "positive")])
+    checkpoints = []
+    SummaryGenerator(FakeProvider([result]), lookup, save_checkpoint=checkpoints.append).generate(
+        PRODUCT, None, [review("new", "Comfortable fit.")], [])
+    checkpoints[0]["summary"]["narrative"] = "Legacy verbose detail. " * 60
+    provider = FakeProvider([result])
+    compact = SummaryGenerator(provider, lookup).generate(
+        PRODUCT, None, [review("new", "Comfortable fit.")], [], checkpoint=checkpoints[0])
+    assert len(compact.narrative) <= 900
+    assert len(provider.messages) == 1
