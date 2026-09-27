@@ -23,6 +23,7 @@ def _index_matches(existing, requested):
 
 def migrate(database, dry_run: bool) -> dict:
     existing = {item["name"]: item for item in database.list_collections()}
+    missing_indexes = {}
     for name, validator in contract.V3_SCHEMAS.items():
         if name not in existing:
             continue
@@ -37,22 +38,41 @@ def migrate(database, dry_run: bool) -> dict:
     # Validate all existing names and equivalent keys before creating anything.
     for name, specs in contract.V3_INDEXES.items():
         indexes = list(database[name].list_indexes()) if name in existing else []
+        missing_indexes[name] = []
         for spec in specs:
             for index in indexes:
                 if (index["name"] == spec["name"] or
                         list(index["key"].items()) == spec["keys"]):
                     if not _index_matches(index, spec):
                         raise ValueError("Index options conflict: " + name + "/" + spec["name"])
+            if not any(index["name"] == spec["name"] for index in indexes):
+                missing_indexes[name].append(spec)
     result = {"version": 3, "dry_run": dry_run, "collections": list(contract.V3_SCHEMAS)}
     if dry_run:
         return result
-    CapacityGuard(database).check_write(estimated_bytes=100_000)
+    # Index builds on populated collections can grow far beyond a fixed allowance.
+    # Deliberately over-reserve twice the logical collection size per missing index;
+    # an unknown or near-limit size fails closed before any schema/index mutation.
+    estimated_bytes = 16_384  # migration marker and collection metadata
+    for name, specs in missing_indexes.items():
+        if not specs:
+            continue
+        if name in existing:
+            size = database.command("collStats", name)["size"]
+            if type(size) is not int or size < 0:
+                raise ValueError("Invalid collection size: " + name)
+            estimated_bytes += max(65_536, size * 2) * len(specs)
+        else:
+            estimated_bytes += 65_536 * len(specs)
+    capacity = CapacityGuard(database)
+    capacity.check_write(estimated_bytes=estimated_bytes)
     for name, validator in contract.V3_SCHEMAS.items():
         if name not in existing:
             database.create_collection(name, validator=validator, validationLevel="strict", validationAction="error")
     for name, specs in contract.V3_INDEXES.items():
         for spec in specs:
             database[name].create_index(spec["keys"], **{key: value for key, value in spec.items() if key != "keys"})
+    capacity.check_write()
     database.schema_migrations.update_one({"_id": "v3"},
         {"$setOnInsert": {"version": 3, "applied_at": datetime.now(timezone.utc)}}, upsert=True)
     return result

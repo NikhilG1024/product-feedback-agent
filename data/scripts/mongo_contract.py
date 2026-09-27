@@ -76,7 +76,12 @@ SUMMARY_SEMANTIC_REVIEW = {'bsonType':'object','required':['status'],
     'properties':{'status':{'enum':['pending','approved','rejected']},
         'reviewer_id':S,'reviewer_type':{'enum':['human','automated']},
         'reviewed_at':D,'artifact_sha256':{'bsonType':'string','minLength':64,'maxLength':64},
-        'rubric_version':S,'factual_support':B,'coverage':B,'classification':B}}
+        'rubric_version':S,'factual_support':B,'coverage':B,'classification':B},
+    'oneOf':[
+        {'properties':{'status':{'enum':['pending']}}},
+        {'required':['reviewer_id','reviewer_type','reviewed_at','artifact_sha256',
+                     'rubric_version','factual_support','coverage','classification'],
+         'properties':{'status':{'enum':['approved','rejected']}}}]}
 V3_SCHEMAS = {
  'product_summary_state': schema(['product_id'], dict(
     product_id=S, current_version={'bsonType':['int','long','null'],'minimum':1},
@@ -85,7 +90,7 @@ V3_SCHEMAS = {
     status={'enum':['uninitialized','waiting','queued','updating','ready','failed']},
     lease_expires_at=D, next_attempt_at=D, job_id=S,
     semantic_review=SUMMARY_SEMANTIC_REVIEW)),
- 'product_summary_versions': schema(['product_id','version','job_id','kind','narrative','themes','coverage','created_at'], dict(
+ 'product_summary_versions': schema(['product_id','version','parent_version','job_id','kind','narrative','themes','coverage','delta_review_ids','model_identity','prompt_version','guidance_references','created_at','semantic_review'], dict(
     product_id=S,version={'bsonType':['int','long'],'minimum':1},
     parent_version={'bsonType':['int','long','null'],'minimum':1},job_id=S,
     kind={'enum':['initial','reviews','guidance']},
@@ -104,6 +109,7 @@ V3_SCHEMAS = {
 }
 V3_INDEXES = {
  'product_summary_state': [
+    {'name':'one_state_per_product','keys':[('product_id',1)],'unique':True},
     {'name':'product_queue','keys':[('status',1),('next_attempt_at',1),('lease_expires_at',1)]}],
  'product_summary_versions': [
     {'name':'product_version','keys':[('product_id',1),('version',1)],'unique':True},

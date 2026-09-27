@@ -79,3 +79,53 @@ def test_conflicting_index_options_refused_before_any_mutation(database):
     with pytest.raises(ValueError, match="Index options conflict"):
         migrate(database, False)
     assert database.list_collection_names() == ["product_summary_versions"]
+
+
+def test_one_state_per_product_even_with_different_ids(database):
+    from app.migrations.v3 import migrate
+    from pymongo.errors import DuplicateKeyError
+    migrate(database, False)
+    database.product_summary_state.insert_one({"_id": "one", "product_id": "P"})
+    with pytest.raises(DuplicateKeyError):
+        database.product_summary_state.insert_one({"_id": "two", "product_id": "P"})
+
+
+def test_version_requires_provenance_and_completed_semantic_review(database):
+    from app.migrations.v3 import migrate
+    from pymongo.errors import WriteError
+    migrate(database, False)
+    stamp = datetime.now(timezone.utc)
+    minimal = {"_id": "v1", "product_id": "P", "version": 1, "job_id": "j",
+        "kind": "initial", "narrative": "Supported", "themes": [],
+        "coverage": {"historical_sample_count": 1, "new_review_count": 0},
+        "created_at": stamp}
+    with pytest.raises(WriteError):
+        database.product_summary_versions.insert_one(minimal)
+    complete = {**minimal, "parent_version": None, "delta_review_ids": [],
+        "model_identity": "local", "prompt_version": "v1", "guidance_references": [],
+        "semantic_review": {"status": "pending"}}
+    database.product_summary_versions.insert_one(complete)
+    with pytest.raises(WriteError):
+        database.product_summary_versions.insert_one({**complete, "_id": "v2", "version": 2,
+            "job_id": "j2", "semantic_review": {"status": "approved"}})
+
+
+def test_populated_index_build_refuses_insufficient_headroom_before_mutation(database, monkeypatch):
+    from app.migrations import v3
+    from app.repositories.capacity import CapacityGuard
+    from app.errors import ServiceError
+    database.create_collection("product_summary_state",
+        validator=v3.contract.V3_SCHEMAS["product_summary_state"],
+        validationLevel="strict", validationAction="error")
+    database.product_summary_state.insert_one({"_id": "P", "product_id": "P", "padding": "x" * 1_000_000})
+    inventory = database.client.admin.command({"listDatabases": 1, "nameOnly": False,
+        "authorizedDatabases": False})
+    total = sum(database.client[item["name"]].command("dbStats", scale=1)[field]
+                for item in inventory["databases"] if item["name"] not in {"admin", "local", "config"}
+                for field in ("dataSize", "indexSize"))
+    monkeypatch.setattr(v3, "CapacityGuard", lambda db: CapacityGuard(db,
+        capacity_bytes=total + 1_000_000 + 200_000))
+    with pytest.raises(ServiceError, match="capacity_exceeded"):
+        v3.migrate(database, False)
+    assert database.list_collection_names() == ["product_summary_state"]
+    assert set(database.product_summary_state.index_information()) == {"_id_"}
