@@ -32,7 +32,7 @@ class Settings:
     summary_llm_provider: str = "local"
     local_model_api_url: str = ""
     local_model_api_key: str = ""
-    local_model_name: str = "qwen3-4b-instruct-2507-local"
+    local_model_name: str = "qwen3-1.7b-local"
     openrouter_api_key: str = ""
     openrouter_api_url: str = OPENROUTER_SUMMARY_URL
     openrouter_summary_model: str = OPENROUTER_SUMMARY_MODEL
@@ -68,9 +68,9 @@ class Settings:
         if self.summary_llm_provider not in {"local", "groq"}:
             raise ValueError('Unsupported summary provider')
         if self.local_model_api_url:
-            from app.integrations.local_summary import LOCAL_SUMMARY_MODEL, validate_local_model_url
+            from app.integrations.local_summary import SUPPORTED_LOCAL_MODELS, validate_local_model_url
             validate_local_model_url(self.local_model_api_url)
-            if self.local_model_name != LOCAL_SUMMARY_MODEL:
+            if self.local_model_name not in SUPPORTED_LOCAL_MODELS:
                 raise ValueError('Only the pinned local Qwen summary model is allowed')
         if (self.openrouter_api_url.rstrip('/') != OPENROUTER_SUMMARY_URL or
                 self.openrouter_summary_model != OPENROUTER_SUMMARY_MODEL):
@@ -138,7 +138,7 @@ class Settings:
             summary_llm_provider=os.getenv("SUMMARY_LLM_PROVIDER") or "local",
             local_model_api_url=os.getenv("LOCAL_MODEL_API_URL", ""),
             local_model_api_key=os.getenv("LOCAL_MODEL_API_KEY", ""),
-            local_model_name=os.getenv("LOCAL_MODEL_NAME") or "qwen3-4b-instruct-2507-local",
+            local_model_name=os.getenv("LOCAL_MODEL_NAME") or "qwen3-1.7b-local",
             openrouter_api_key=os.getenv("OPENROUTER_API_KEY", ""),
             openrouter_api_url=os.getenv("OPENROUTER_SUMMARY_URL") or OPENROUTER_SUMMARY_URL,
             openrouter_summary_model=os.getenv("OPENROUTER_SUMMARY_MODEL") or OPENROUTER_SUMMARY_MODEL,

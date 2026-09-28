@@ -51,3 +51,25 @@ def test_matching_model_process_is_reused_and_unknown_port_owner_is_refused(monk
                         lambda: iter([]))
     with pytest.raises(RuntimeError, match="unknown process"):
         launcher["model_process"](model_file, key_file)
+
+
+def test_worker_discovery_is_scoped_to_this_repository(monkeypatch):
+    fn = launcher['summary_worker_process']
+    monkeypatch.setitem(fn.__globals__, 'processes', lambda: iter([
+        (12, ['python', '-m', 'app.run_summary_worker']),
+        (13, ['python', '-m', 'app.run_summary_worker'])]))
+    monkeypatch.setitem(fn.__globals__, 'process_cwd',
+        lambda pid: launcher['ROOT'] / 'backend' if pid == 12 else Path('/other/backend'))
+    assert fn() == 12
+
+
+def test_worker_start_loads_private_environment_without_command_line_secrets(monkeypatch):
+    calls = []
+    fn = launcher['start_summary_worker']
+    monkeypatch.setitem(fn.__globals__, 'launch', lambda args, log, **kwargs: calls.append((args, kwargs)) or 'child')
+    assert fn({'MONGODB_URI': 'private-uri', 'LOCAL_MODEL_API_URL': 'https://model.ngrok.app/v1'}) == 'child'
+    args, options = calls[0]
+    assert args[-2:] == ['-m', 'app.run_summary_worker']
+    assert 'private-uri' not in ' '.join(args)
+    assert options['env']['MONGODB_URI'] == 'private-uri'
+    assert options['cwd'] == launcher['ROOT'] / 'backend'

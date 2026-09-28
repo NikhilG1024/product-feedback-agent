@@ -13,7 +13,8 @@ from app.integrations.openrouter_summary import (
     EVIDENCE_LIMIT_REMINDER, _compact_representative_evidence)
 from app.summaries.generation import serialized_prompt_bytes
 
-LOCAL_SUMMARY_MODEL = "qwen3-4b-instruct-2507-local"
+LOCAL_SUMMARY_MODEL = "qwen3-1.7b-local"
+SUPPORTED_LOCAL_MODELS = {LOCAL_SUMMARY_MODEL, "qwen3-4b-instruct-2507-local"}
 LOCAL_SUMMARY_PROMPT_BYTES = 32000
 LOCAL_SUMMARY_REQUEST_BYTES = 42000
 LOCAL_SUMMARY_OUTPUT_BYTES = 100000
@@ -112,7 +113,7 @@ class LocalSummaryModel:
                  model: str = LOCAL_SUMMARY_MODEL, timeout: float = 600,
                  transport: Any = None):
         validate_local_model_url(base_url)
-        if model != LOCAL_SUMMARY_MODEL:
+        if model not in SUPPORTED_LOCAL_MODELS:
             raise ValueError("Only the pinned local Qwen summary model is allowed")
         self.model = model
         self.http = JSONTransport(base_url, api_key, timeout=timeout,
@@ -136,6 +137,7 @@ class LocalSummaryModel:
             schema = _batch_schema(output_schema, input_data["new_reviews"])
             payload = {"model": self.model, "messages": bounded_messages,
                        "stream": False, "temperature": 0, "seed": 27,
+                       "chat_template_kwargs": {"enable_thinking": False},
                        "max_tokens": LOCAL_SUMMARY_MAX_TOKENS,
                        "response_format": {"type": "json_object", "schema": schema}}
             prompt_size = serialized_prompt_bytes(bounded_messages)

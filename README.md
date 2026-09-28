@@ -78,7 +78,7 @@ load it for each process. Restart the API and worker after changing configuratio
 Keep secrets out of Git and all `VITE_` variables; frontend environment variables
 are not a safe place for credentials.
 
-To start the local summary model and its ngrok tunnel with one command, set
+To start the local summary model, ngrok tunnel, and summary worker with one command, set
 `LOCAL_MODEL_FILE` in the private `.env` to the absolute Qwen GGUF path. Put the
 llama-server Bearer key in `../../work/runtime/local-model-api-key` with mode `0600`,
 or set `LOCAL_MODEL_API_KEY_FILE` in `.env` to another private key-file path.
@@ -93,7 +93,9 @@ The command verifies the pinned model on `127.0.0.1:4300`, starts or reuses a
 matching ngrok tunnel to that port, checks the public endpoint with the Bearer
 key, and updates only the local summary-provider settings in `.env`. It never
 tunnels the backend. Leave it running; Ctrl-C stops only processes this command
-started. Existing model or tunnel processes are reused and left alone. Run
+started. Existing model, tunnel, and same-repository summary worker processes are
+reused and left alone. The worker loads the private `.env` using `backend/.venv`;
+its output goes to `../../work/runtime/summary-worker.log`. Run
 `./scripts/start-local-model --check` to verify the existing setup without
 starting processes or changing `.env`. For a reserved ngrok hostname, set
 `LOCAL_MODEL_NGROK_DOMAIN` in `.env`; otherwise ngrok assigns one. Restart the
@@ -280,3 +282,18 @@ respective guides.
 See [backend details](backend/README.md), [provider contract](docs/provider-contract.md)
 and [dataset provenance](docs/mongodb-data-layer.md). This is a local hackathon
 prototype; public deployment needs individual authentication and deployment setup.
+
+
+### Incremental summary weighting and local model
+
+Full narrative rewrites use prior analyzed-review coverage as editorial guidance:
+the existing summary receives at least 80% emphasis (more when its review count
+warrants it). For 20 prior reviews and one new review, the prompt uses about
+95% prior and 5% new weight. These are prompt instructions, not measured sentiment
+or guaranteed prose proportions. New negative reports remain visible as isolated,
+unconfirmed reports; existing themes and evidence are retained by the application.
+
+The local runtime now uses Qwen3 1.7B Q8_0 with thinking disabled, one inference
+slot, and an 8192-token context. Download the official GGUF from
+https://huggingface.co/Qwen/Qwen3-1.7B-GGUF and set `LOCAL_MODEL_FILE` privately.
+The pinned download revision is `90862c4b9d2787eaed51d12237eafdfe7c5f6077`.

@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Start or reuse authenticated local Qwen and its ngrok model-only tunnel."""
+"""Start or reuse authenticated local Qwen, its ngrok tunnel, and the summary worker."""
 import argparse
 from hmac import compare_digest
 import json
@@ -20,13 +20,13 @@ from urllib.request import Request, urlopen
 ROOT = Path(__file__).resolve().parents[1]
 ENV_FILE = ROOT / ".env"
 RUNTIME = ROOT.parents[1] / "work" / "runtime"
-ALIAS = "qwen3-4b-instruct-2507-local"
+ALIAS = "qwen3-1.7b-local"
 PORT = 4300
 LOCAL_BASE = f"http://127.0.0.1:{PORT}/v1"
 MODEL_ARGS = ["--host", "127.0.0.1", "--port", str(PORT), "--alias", ALIAS,
-              "--parallel", "6", "--ctx-size", "49152", "--kv-unified-per-slot", "8192",
+              "--parallel", "1", "--ctx-size", "8192", "--kv-unified-per-slot", "8192",
               "--cache-ram", "0", "--ubatch-size", "256", "--cont-batching",
-              "--gpu-layers", "99", "--jinja"]
+              "--gpu-layers", "99", "--jinja", "--reasoning", "off"]
 
 
 def fail(message):
@@ -226,11 +226,39 @@ def update_private_env(path, updates):
     return True
 
 
-def launch(args, log_path):
+def process_cwd(pid):
+    proc = Path(f"/proc/{pid}/cwd")
+    if proc.exists():
+        return proc.resolve()
+    result = subprocess.run(["lsof", "-a", "-p", str(pid), "-d", "cwd", "-Fn"],
+                            capture_output=True, text=True)
+    return next((Path(line[1:]).resolve() for line in result.stdout.splitlines()
+                 if line.startswith("n")), None)
+
+
+def summary_worker_process():
+    matches = [pid for pid, args in processes()
+               if flag(args, "-m") == "app.run_summary_worker"
+               and process_cwd(pid) == ROOT / "backend"]
+    if len(matches) > 1:
+        fail("Multiple summary workers are running for this repository; stop duplicates first")
+    return matches[0] if matches else None
+
+
+def start_summary_worker(env):
+    python = ROOT / "backend" / ".venv" / "bin" / "python"
+    if not python.is_file():
+        fail("Set up backend/.venv before starting the summary worker")
+    worker_env = {**os.environ, **env, "PYTHONPATH": str(ROOT / "backend")}
+    return launch([str(python), "-m", "app.run_summary_worker"],
+                  RUNTIME / "summary-worker.log", cwd=ROOT / "backend", env=worker_env)
+
+
+def launch(args, log_path, *, cwd=ROOT, env=None):
     log_path.parent.mkdir(parents=True, exist_ok=True)
     fd = os.open(log_path, os.O_CREAT | os.O_WRONLY | os.O_APPEND, 0o600)
     with os.fdopen(fd, "a") as log:
-        return subprocess.Popen(args, cwd=ROOT, stdin=subprocess.DEVNULL,
+        return subprocess.Popen(args, cwd=cwd, env=env, stdin=subprocess.DEVNULL,
                                 stdout=log, stderr=subprocess.STDOUT,
                                 start_new_session=True)
 
@@ -300,7 +328,11 @@ def main():
         wait_until(lambda: models_url(base, key) or True, None, 30, "public model endpoint")
         print("Authenticated public model probe passed.")
         print("Model API URL:", base)
+        running_worker = summary_worker_process()
+        if args.check and not running_worker:
+            fail("Model is healthy but no summary worker is running; run this command without --check")
         if args.check:
+            print(f"Summary worker is running (PID {running_worker}).")
             print("Check complete; no processes or .env settings changed.")
             return
         changed = update_private_env(ENV_FILE, {
@@ -310,6 +342,17 @@ def main():
             print("Private .env updated. Restart the backend API and summary worker to use this model URL.")
         else:
             print("Private .env already matches the active model URL.")
+        if running_worker:
+            print(f"Reusing summary worker (PID {running_worker}).")
+            if changed:
+                fail("Existing worker needs a restart to load changed .env; stop it and rerun")
+        else:
+            child = start_summary_worker(read_env(ENV_FILE))
+            children.append(child)
+            time.sleep(2)
+            if child.poll() is not None:
+                fail("Summary worker exited during startup; inspect the private runtime log")
+            print(f"Started summary worker (PID {child.pid}).")
         print("Press Ctrl-C to stop only processes started by this command.")
         while True:
             for child in children:

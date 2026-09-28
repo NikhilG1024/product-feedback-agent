@@ -266,14 +266,14 @@ def test_split_requests_checkpoint_each_validated_stage_and_resume():
     second = output([theme("one", "r1", "first."), theme("two", "r2", "second.")])
     checkpoints = []
     provider = FakeProvider([first, second])
-    generator = SummaryGenerator(provider, lookup, max_prompt_bytes=5600,
+    generator = SummaryGenerator(provider, lookup, max_prompt_bytes=6400,
                                  save_checkpoint=lambda state: checkpoints.append(state))
     result = generator.generate(PRODUCT, None, reviews, [])
     assert result.model_dump() == second
     assert len(provider.messages) == 2
     assert checkpoints[0]["processed_review_ids"] == ["r1"]
     assert checkpoints[1]["processed_review_ids"] == ["r1", "r2"]
-    resumed = SummaryGenerator(FakeProvider([second]), lookup, max_prompt_bytes=5600).generate(
+    resumed = SummaryGenerator(FakeProvider([second]), lookup, max_prompt_bytes=6400).generate(
         PRODUCT, None, reviews, [], checkpoint=checkpoints[0])
     assert resumed.model_dump() == second
 
@@ -284,7 +284,7 @@ def test_intermediate_checkpoint_cannot_cite_a_future_frozen_review():
     provider = FakeProvider([future])
     checkpoints = []
     with pytest.raises(SummaryGenerationError, match="summary_unsupported_evidence"):
-        SummaryGenerator(provider, lookup, max_prompt_bytes=5000,
+        SummaryGenerator(provider, lookup, max_prompt_bytes=6400,
                          save_checkpoint=checkpoints.append).generate(PRODUCT, None, reviews, [])
     assert len(provider.messages) == 1
     assert checkpoints == []
@@ -368,7 +368,7 @@ def test_rewrites_long_stored_summary_into_bounded_narrative_without_losing_evid
                        theme("comfort", "new", "Comfortable fit.", "positive")])
     response["narrative"] = "Comfort is praised, but a reviewer reports battery failure."
     provider = FakeProvider([response])
-    result = SummaryGenerator(provider, lookup).generate(PRODUCT, old, [review("new", "Comfortable fit.")], [])
+    result = SummaryGenerator(provider, lookup, max_prompt_bytes=7000).generate(PRODUCT, old, [review("new", "Comfortable fit.")], [])
     assert len(result.narrative) <= 900
     assert old.narrative == "Previous verbose detail. " * 70
     assert {t.id for t in result.themes} == {"battery", "comfort"}
@@ -394,3 +394,33 @@ def test_reprocesses_oversized_legacy_checkpoint_instead_of_publishing_it():
         PRODUCT, None, [review("new", "Comfortable fit.")], [], checkpoint=checkpoints[0])
     assert len(compact.narrative) <= 900
     assert len(provider.messages) == 1
+
+
+def test_prompt_weights_established_evidence_over_single_review():
+    messages = _prompt_messages(PRODUCT, {'narrative': 'Established positive feedback'},
+        [review('new', 'One complaint')], [], delta_mode=True, prior_review_count=20)
+    weight = json.loads(messages[1]['content'])['evidence_weighting']
+    assert weight['prior_review_count'] == 20
+    assert weight['new_review_count'] == 1
+    assert weight['prior_weight'] > 0.95
+    assert weight['new_weight'] < 0.05
+    assert 'isolated report' in messages[0]['content']
+
+
+def test_initial_summary_has_no_invented_prior_weight():
+    messages = _prompt_messages(PRODUCT, None, [review('new', 'Good')], [], prior_review_count=0)
+    weight = json.loads(messages[1]['content'])['evidence_weighting']
+    assert weight['prior_weight'] == 0
+    assert weight['new_weight'] == 1
+
+
+def test_generator_uses_parent_coverage_for_weighting():
+    old = parent([theme('battery', 'old', 'Battery failed after an hour.')])
+    old.coverage.historical_sample_count = 20
+    old.coverage.new_review_count = 5
+    provider = FakeProvider([output([theme('battery', 'old', 'Battery failed after an hour.'),
+                                    theme('comfort', 'new', 'Comfortable fit.', 'positive')])])
+    SummaryGenerator(provider, lookup).generate(PRODUCT, old, [review('new', 'Comfortable fit.')], [])
+    weighting = json.loads(provider.messages[0][1]['content'])['evidence_weighting']
+    assert weighting['prior_review_count'] == 25
+    assert weighting['new_review_count'] == 1
