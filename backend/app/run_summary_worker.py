@@ -2,6 +2,9 @@
 
 import asyncio
 import signal
+import logging
+
+from pymongo.errors import PyMongoError
 
 from app.main import configured_app
 from app.errors import ServiceError
@@ -18,6 +21,13 @@ def main():
             while not worker.stopped.is_set():
                 try:
                     did_work = worker.tick()
+                except PyMongoError as exc:
+                    # Never log exception payloads: database URLs may be sensitive.
+                    logging.getLogger(__name__).warning(
+                        "Summary worker database interruption (%s); retrying in 5 seconds",
+                        type(exc).__name__)
+                    worker.stopped.wait(5)
+                    continue
                 except ServiceError:
                     # A capacity or provider configuration failure must not
                     # terminate the process; durable state remains for retry.
